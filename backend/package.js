@@ -1,0 +1,21 @@
+{
+  "name": "root-and-fruit-backend",
+  "version": "1.0.0",
+  "description": "Root & Fruit Integrity Index — Backend API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.9.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
