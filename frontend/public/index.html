@@ -1,0 +1,2270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Root & Fruit — Integrity Index</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root {
+    --black: #080808;
+    --surface: #111111;
+    --surface2: #1a1a1a;
+    --border: #2a2a2a;
+    --border-light: #333;
+    --gold: #c8a96e;
+    --gold-dim: rgba(200,169,110,0.15);
+    --green: #52d48a;
+    --green-dim: rgba(82,212,138,0.12);
+    --blue: #5ba3f5;
+    --blue-dim: rgba(91,163,245,0.12);
+    --orange: #f0913a;
+    --orange-dim: rgba(240,145,58,0.12);
+    --red: #e85555;
+    --red-dim: rgba(232,85,85,0.12);
+    --purple: #a78bfa;
+    --text: #e8e8e8;
+    --text-dim: #888;
+    --text-dimmer: #555;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--black);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ─── GRAIN OVERLAY ─── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.5;
+  }
+
+  /* ─── TYPOGRAPHY ─── */
+  .display { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.05em; }
+  .mono { font-family: 'DM Mono', monospace; }
+
+  /* ─── LAYOUT ─── */
+  .container { max-width: 780px; margin: 0 auto; padding: 0 16px; }
+  .container-wide { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+
+  /* ─── HEADER ─── */
+  header {
+    background: rgba(8,8,8,0.92);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+    padding: 0 16px;
+  }
+  .header-inner {
+    max-width: 780px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 64px;
+  }
+  .logo { display: flex; align-items: baseline; gap: 8px; }
+  .logo-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 0.08em; color: var(--text); }
+  .logo-title span { color: var(--gold); }
+  .logo-sub { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.2em; }
+  .header-score-wrap { display: flex; align-items: center; gap: 16px; }
+  #liveScore {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px;
+    color: var(--text-dim);
+    transition: color 0.4s, transform 0.2s;
+    min-width: 50px; text-align: right;
+  }
+  .header-actions { display: flex; gap: 8px; align-items: center; }
+  .btn-ghost {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 12px; font-family: 'DM Mono', monospace;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    transition: all 0.2s;
+  }
+  .btn-ghost:hover { border-color: var(--gold); color: var(--gold); }
+
+  /* ─── NAV TABS ─── */
+  .nav-tabs {
+    display: flex; gap: 2px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 3px;
+    flex-wrap: wrap;
+  }
+  .nav-tab {
+    padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: 0.08em; border: none; background: transparent;
+    color: var(--text-dim); transition: all 0.2s; white-space: nowrap;
+  }
+  .nav-tab.active { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+
+  /* ─── MAIN CONTENT ─── */
+  main { padding: 32px 0 180px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ─── CARDS ─── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .card-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px;
+  }
+  .card-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0;
+  }
+  .card-title { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 0.06em; }
+  .card-desc { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+  /* ─── SECTION LABELS ─── */
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em;
+    color: var(--text-dim); margin-bottom: 8px;
+  }
+
+  /* ─── SUBJECT INPUT ─── */
+  .subject-toggle {
+    display: inline-flex; gap: 2px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 3px; margin-bottom: 16px;
+  }
+  .toggle-btn {
+    padding: 7px 16px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; font-weight: 500; border: none;
+    background: transparent; color: var(--text-dim);
+    transition: all 0.2s; white-space: nowrap;
+  }
+  .toggle-btn.active {
+    background: var(--gold); color: #000; font-weight: 700;
+  }
+
+  .input-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 200px; }
+  .input-group label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+
+  input[type=text], select {
+    background: var(--black);
+    border: 1px solid var(--border);
+    color: var(--text); padding: 10px 14px;
+    border-radius: 8px; font-family: 'DM Sans', sans-serif;
+    font-size: 14px; width: 100%;
+    transition: border-color 0.2s;
+  }
+  input[type=text]:focus, select:focus {
+    outline: none; border-color: var(--gold);
+  }
+  input[type=text]::placeholder { color: var(--text-dimmer); }
+
+  /* ─── CHECKBOXES ─── */
+  .check-row {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 14px 16px; border-radius: 10px;
+    border: 1px solid transparent;
+    cursor: pointer; transition: all 0.18s;
+    margin-bottom: 8px;
+  }
+  .check-row:hover { background: var(--surface2); border-color: var(--border); }
+  .check-row.checked-gold { background: var(--gold-dim); border-color: rgba(200,169,110,0.3); }
+  .check-row.checked-blue { background: var(--blue-dim); border-color: rgba(91,163,245,0.3); }
+  .check-row.checked-red { background: var(--red-dim); border-color: rgba(232,85,85,0.3); }
+
+  .custom-cb {
+    width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;
+    border: 2px solid var(--border); border-radius: 5px;
+    background: var(--black); cursor: pointer;
+    appearance: none; display: grid; place-content: center;
+    transition: all 0.18s;
+  }
+  .custom-cb::before {
+    content: ""; width: 10px; height: 10px;
+    transform: scale(0);
+    transition: transform 0.15s ease;
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  }
+  .custom-cb.gold-cb:checked { border-color: var(--gold); background: var(--gold-dim); }
+  .custom-cb.gold-cb::before { box-shadow: inset 1em 1em var(--gold); }
+  .custom-cb.gold-cb:checked::before { transform: scale(1); }
+  .custom-cb.blue-cb:checked { border-color: var(--blue); background: var(--blue-dim); }
+  .custom-cb.blue-cb::before { box-shadow: inset 1em 1em var(--blue); }
+  .custom-cb.blue-cb:checked::before { transform: scale(1); }
+  .custom-cb.red-cb:checked { border-color: var(--red); background: var(--red-dim); }
+  .custom-cb.red-cb::before { box-shadow: inset 1em 1em var(--red); }
+  .custom-cb.red-cb:checked::before { transform: scale(1); }
+
+  .check-label-title { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+  .check-label-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+  /* ─── SLIDERS ─── */
+  .slider-card {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 10px;
+  }
+  .slider-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  .slider-name { font-weight: 600; font-size: 14px; }
+  .slider-pts {
+    font-family: 'DM Mono', monospace; font-size: 13px;
+    font-weight: 500; transition: color 0.3s;
+  }
+  .slider-subdesc { font-size: 11px; color: var(--text-dim); margin-bottom: 12px; line-height: 1.4; }
+
+  input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+  input[type=range]:focus { outline: none; }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 5px; border-radius: 3px; background: var(--border);
+  }
+  input[type=range].green-range::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--green); margin-top: -7.5px; cursor: pointer;
+    box-shadow: 0 0 12px rgba(82,212,138,0.4); transition: transform 0.1s;
+  }
+  input[type=range].orange-range::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--orange); margin-top: -7.5px; cursor: pointer;
+    box-shadow: 0 0 12px rgba(240,145,58,0.4); transition: transform 0.1s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+  .slider-ticks {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--text-dimmer);
+    text-transform: uppercase; letter-spacing: 0.07em;
+    margin-top: 6px; font-family: 'DM Mono', monospace;
+  }
+
+  /* ─── TOXIC ─── */
+  .toxic-row {
+    background: rgba(232,85,85,0.05);
+    border: 1px solid rgba(232,85,85,0.2);
+    border-radius: 10px; padding: 14px 16px;
+    display: flex; align-items: flex-start; gap: 14px;
+    margin-bottom: 8px; cursor: pointer; transition: all 0.18s;
+  }
+  .toxic-row:hover { background: rgba(232,85,85,0.1); }
+  .toxic-row.active { background: rgba(232,85,85,0.15); border-color: rgba(232,85,85,0.5); }
+  .toxic-pts { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--red); }
+
+  /* ─── ANALYSIS RESULT ─── */
+  .audit-box {
+    border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; margin-top: 20px;
+  }
+  .audit-box-header {
+    background: var(--surface2); padding: 12px 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .audit-box-title { font-family: 'DM Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--gold); }
+  .audit-box-body { padding: 20px; }
+
+  .audit-section { margin-bottom: 24px; }
+  .audit-section-title {
+    font-family: 'DM Mono', monospace; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    padding-bottom: 8px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .audit-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .audit-item:last-child { border-bottom: none; }
+  .audit-item-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .audit-item-name { font-weight: 600; font-size: 13px; }
+  .audit-item-reason { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+  /* ─── SCORE CHART (Radar) ─── */
+  canvas#radarChart { width: 100% !important; max-width: 380px; margin: 0 auto; display: block; }
+
+  /* ─── SCORE BREAKDOWN GRID ─── */
+  .score-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+  }
+  @media (max-width: 500px) { .score-grid { grid-template-columns: 1fr; } }
+  .score-cell {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px;
+  }
+  .score-cell-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }
+  .score-cell-value { font-family: 'Bebas Neue', sans-serif; font-size: 32px; letter-spacing: 0.04em; }
+  .score-cell-max { font-size: 12px; color: var(--text-dimmer); }
+  .score-cell-bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .score-cell-fill { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
+
+  /* ─── FOOTER ─── */
+  .sticky-footer {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(8,8,8,0.95); backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px 20px; z-index: 99;
+  }
+  .footer-inner {
+    max-width: 780px; margin: 0 auto;
+  }
+  .verdict-row {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
+  }
+  .verdict-label { font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; }
+  #verdictTitle {
+    font-family: 'Bebas Neue', sans-serif; font-size: 28px;
+    letter-spacing: 0.06em; transition: color 0.4s;
+  }
+  .score-label { font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; text-align: right; }
+  #finalScore {
+    font-family: 'Bebas Neue', sans-serif; font-size: 42px;
+    letter-spacing: 0.04em; transition: color 0.4s; line-height: 1;
+  }
+  .score-max { font-size: 14px; color: var(--text-dimmer); }
+  .footer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn-action {
+    flex: 1; padding: 10px 14px; border-radius: 8px; border: none;
+    cursor: pointer; font-family: 'DM Mono', monospace; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500;
+    transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 7px;
+    min-width: 100px;
+  }
+  .btn-primary { background: var(--gold); color: #000; }
+  .btn-primary:hover { background: #d4b57c; }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--text-dim); }
+
+  /* ─── COMPARISON VIEW ─── */
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 600px) { .compare-grid { grid-template-columns: 1fr; } }
+  .compare-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .compare-panel-header { background: var(--surface2); padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; }
+  .compare-vs {
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Bebas Neue', sans-serif; font-size: 48px; color: var(--border);
+    padding: 40px 0;
+  }
+
+  /* ─── SAVED AUDITS ─── */
+  .audit-list-item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 10px; display: flex; align-items: center;
+    justify-content: space-between; cursor: pointer; transition: all 0.18s; gap: 12px;
+  }
+  .audit-list-item:hover { border-color: var(--gold); }
+  .audit-list-name { font-weight: 600; font-size: 14px; }
+  .audit-list-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .audit-list-score { font-family: 'Bebas Neue', sans-serif; font-size: 28px; flex-shrink: 0; }
+  .audit-list-actions { display: flex; gap: 6px; }
+  .btn-icon {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim); width: 32px; height: 32px; border-radius: 6px;
+    cursor: pointer; font-size: 12px; transition: all 0.18s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .btn-icon:hover { border-color: var(--red); color: var(--red); }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+  .empty-state i { font-size: 40px; margin-bottom: 16px; opacity: 0.3; }
+
+  /* ─── SOURCES ─── */
+  .source-category { margin-bottom: 16px; }
+  .source-cat-label {
+    font-family: 'DM Mono', monospace; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.15em; color: var(--gold); margin-bottom: 8px;
+  }
+  .source-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .source-item:last-child { border-bottom: none; }
+  .source-link { font-size: 12px; color: var(--blue); text-decoration: none; flex: 1; line-height: 1.4; }
+  .source-link:hover { text-decoration: underline; }
+  .source-text { font-size: 12px; color: var(--text-dim); flex: 1; }
+  .bias-badge {
+    font-family: 'DM Mono', monospace; font-size: 10px; padding: 2px 6px;
+    border-radius: 4px; border: 1px solid var(--border); white-space: nowrap; flex-shrink: 0;
+  }
+
+  /* ─── TOAST ─── */
+  .toast {
+    position: fixed; bottom: 140px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 10px 20px; border-radius: 8px;
+    font-size: 13px; opacity: 0; transition: all 0.3s;
+    pointer-events: none; z-index: 9998; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ─── ERROR ─── */
+  .error-box {
+    background: rgba(232,85,85,0.08); border: 1px solid rgba(232,85,85,0.3);
+    color: var(--red); padding: 12px 16px; border-radius: 8px;
+    font-size: 12px; margin-top: 12px; display: none;
+  }
+
+  /* ─── SUPPORTERS / OPPONENTS ─── */
+  .supporters-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 500px) { .supporters-grid { grid-template-columns: 1fr; } }
+  .supporter-panel { border-radius: 8px; padding: 12px; }
+
+  /* ─── MOBILE ─── */
+  @media (max-width: 600px) {
+    .logo-title { font-size: 22px; }
+    .header-inner { height: 56px; }
+    .input-row { flex-direction: column; }
+    .footer-actions { }
+    #finalScore { font-size: 34px; }
+    #verdictTitle { font-size: 22px; }
+    .btn-action { font-size: 10px; padding: 9px 10px; }
+  }
+
+  /* ─── ANIMATIONS ─── */
+  .fade-in { animation: fadeIn 0.4s ease forwards; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .pulse-score { animation: pulseScore 0.3s ease; }
+  @keyframes pulseScore { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+  /* ─── ONBOARDING MODAL ─── */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.85); backdrop-filter: blur(12px);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; max-width: 540px; width: 100%;
+    max-height: 90vh; overflow-y: auto; animation: fadeIn 0.3s ease;
+  }
+  .modal-header { padding: 28px 28px 0; text-align: center; }
+  .modal-body { padding: 20px 28px 28px; }
+  .onboard-step { display: none; }
+  .onboard-step.active { display: block; }
+  .onboard-icon { font-size: 48px; display: block; margin-bottom: 16px; text-align: center; }
+  .onboard-title { font-family: 'Bebas Neue', sans-serif; font-size: 30px; letter-spacing: 0.06em; text-align: center; margin-bottom: 8px; }
+  .onboard-body { font-size: 14px; color: var(--text-dim); line-height: 1.75; text-align: center; margin-bottom: 24px; }
+  .onboard-pillars { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 24px; }
+  .onboard-pillar { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px; text-align: center; }
+  .onboard-pillar-icon { font-size: 22px; margin-bottom: 6px; }
+  .onboard-pillar-name { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+  .onboard-pillar-desc { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+  .onboard-dots { display: flex; justify-content: center; gap: 6px; margin-bottom: 20px; }
+  .onboard-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); transition: background 0.2s; }
+  .onboard-dot.active { background: var(--gold); }
+  .onboard-nav { display: flex; gap: 10px; }
+  .btn-onboard-skip { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 11px 18px; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; white-space: nowrap; }
+  .btn-onboard-skip:hover { border-color: var(--text-dim); color: var(--text); }
+  .btn-onboard-next { flex: 1; background: var(--gold); color: #000; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; }
+  .btn-onboard-next:hover { background: #d4b57c; }
+
+  /* ─── PATHWAY MODIFIER ─── */
+  .pathway-toggle { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .pathway-btn { flex: 1; min-width: 140px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--text-dim); cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif; font-weight: 500; transition: all 0.2s; text-align: center; line-height: 1.4; }
+  .pathway-btn.active { border-color: var(--gold); color: var(--text); background: var(--gold-dim); }
+  .pathway-btn .pathway-label { font-weight: 700; display: block; margin-bottom: 2px; }
+  .pathway-btn .pathway-sub { font-size: 10px; opacity: 0.7; }
+  .pathway-note { background: var(--gold-dim); border: 1px solid rgba(200,169,110,0.25); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--text-dim); line-height: 1.6; margin-bottom: 16px; display: none; }
+  .pathway-note.visible { display: block; }
+
+  /* ─── SHARE CARD ─── */
+  .share-card-wrap { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 16px; }
+  .share-card-preview { display: flex; justify-content: center; padding: 20px; background: repeating-conic-gradient(var(--border) 0% 25%, transparent 0% 50%) 0 0/20px 20px; }
+  #shareCardCanvas { border-radius: 8px; max-width: 100%; height: auto; }
+  .share-card-actions { padding: 14px 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ─── METHODOLOGY ─── */
+  .method-section { margin-bottom: 32px; }
+  .method-section-title { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 0.05em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .method-body { font-size: 13px; color: var(--text-dim); line-height: 1.8; }
+  .method-body p { margin-bottom: 12px; }
+  .method-body strong { color: var(--text); }
+  .method-pillar-row { display: grid; grid-template-columns: 40px 1fr; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .method-pillar-row:last-child { border-bottom: none; }
+  .method-pillar-icon { font-size: 24px; margin-top: 2px; }
+  .method-pillar-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .method-pillar-desc { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+  .verdict-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+  .verdict-table th { text-align: left; padding: 8px 10px; background: var(--surface2); color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; }
+  .verdict-table td { padding: 10px; border-top: 1px solid var(--border); }
+  .disclaimer-box { background: var(--gold-dim); border: 1px solid rgba(200,169,110,0.3); border-radius: 10px; padding: 16px 18px; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+  .disclaimer-box strong { color: var(--gold); }
+</style>
+</head>
+<body>
+
+<!-- ══════════ ONBOARDING MODAL ══════════ -->
+<div class="modal-overlay hidden" id="onboardModal">
+  <div class="modal">
+    <div class="modal-body">
+
+      <!-- Step 1: Welcome -->
+      <div class="onboard-step active" id="ob-step-0">
+        <span class="onboard-icon">🌱</span>
+        <div class="onboard-title">Root <span style="color:var(--gold);">&</span> Fruit</div>
+        <div class="onboard-body">A community-built framework for evaluating political candidates and policies — not by their promises, but by their <strong style="color:var(--text);">values, advocacy, and actual deliverables.</strong><br><br>Built for voters who need more than a party line.</div>
+        <div class="onboard-dots">
+          <div class="onboard-dot active"></div><div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot"></div>
+        </div>
+        <div class="onboard-nav">
+          <button class="btn-onboard-skip" onclick="closeOnboarding()">Skip</button>
+          <button class="btn-onboard-next" onclick="obNext()">Get Started →</button>
+        </div>
+      </div>
+
+      <!-- Step 2: The Framework -->
+      <div class="onboard-step" id="ob-step-1">
+        <div class="onboard-title" style="margin-bottom:16px;">The Framework</div>
+        <div class="onboard-pillars">
+          <div class="onboard-pillar">
+            <div class="onboard-pillar-icon">🌱</div>
+            <div class="onboard-pillar-name" style="color:var(--gold);">The Root</div>
+            <div class="onboard-pillar-desc">Core values. Does their worldview actually center the community?</div>
+          </div>
+          <div class="onboard-pillar">
+            <div class="onboard-pillar-icon">📣</div>
+            <div class="onboard-pillar-name" style="color:var(--blue);">The Branches</div>
+            <div class="onboard-pillar-desc">Active advocacy. Did they fight for it, even when they couldn't win?</div>
+          </div>
+          <div class="onboard-pillar">
+            <div class="onboard-pillar-icon">🍎</div>
+            <div class="onboard-pillar-name" style="color:var(--green);">The Fruit</div>
+            <div class="onboard-pillar-desc">Real deliverables. What actually changed because of them?</div>
+          </div>
+          <div class="onboard-pillar">
+            <div class="onboard-pillar-icon">☀️</div>
+            <div class="onboard-pillar-name" style="color:var(--orange);">The Light</div>
+            <div class="onboard-pillar-desc">Transparency. How visible and documented is their record?</div>
+          </div>
+        </div>
+        <div class="onboard-dots">
+          <div class="onboard-dot"></div><div class="onboard-dot active"></div><div class="onboard-dot"></div><div class="onboard-dot"></div>
+        </div>
+        <div class="onboard-nav">
+          <button class="btn-onboard-skip" onclick="obPrev()">← Back</button>
+          <button class="btn-onboard-next" onclick="obNext()">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Pathway -->
+      <div class="onboard-step" id="ob-step-2">
+        <span class="onboard-icon">🛤️</span>
+        <div class="onboard-title">Two Pathways</div>
+        <div class="onboard-body">This tool evaluates <strong style="color:var(--text);">elected officials</strong> and <strong style="color:var(--text);">community leaders</strong> fairly — because holding office isn't the only way to create change.<br><br>Organizers, activists, and civic leaders are scored on their documented record of advocacy and impact, not on whether they passed a bill.</div>
+        <div class="onboard-dots">
+          <div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot active"></div><div class="onboard-dot"></div>
+        </div>
+        <div class="onboard-nav">
+          <button class="btn-onboard-skip" onclick="obPrev()">← Back</button>
+          <button class="btn-onboard-next" onclick="obNext()">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 4: How to Use -->
+      <div class="onboard-step" id="ob-step-3">
+        <span class="onboard-icon">✋</span>
+        <div class="onboard-title">How to Use It</div>
+        <div class="onboard-body">
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:left;">
+            <div style="font-weight:700;margin-bottom:4px;font-size:13px;">Score the Record</div>
+            <div style="font-size:12px;">Research your subject, then use the checkboxes and sliders to score each pillar based on documented evidence. Save, share, and compare results with others.</div>
+          </div>
+        </div>
+        <div class="onboard-dots">
+          <div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot active"></div>
+        </div>
+        <div class="onboard-nav">
+          <button class="btn-onboard-skip" onclick="obPrev()">← Back</button>
+          <button class="btn-onboard-next" onclick="closeOnboarding()" style="background:var(--green);color:#000;">Start Assessing →</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div>
+        <div class="logo-title">Root <span>&</span> Fruit</div>
+        <div class="logo-sub">Integrity Index</div>
+      </div>
+    </div>
+    <div class="header-score-wrap">
+      <div class="header-actions">
+        <button class="btn-ghost" onclick="showOnboarding()"><i class="fa-solid fa-circle-question"></i> <span class="hide-xs">How it Works</span></button>
+        <button class="btn-ghost" onclick="showView('saved')"><i class="fa-solid fa-folder-open"></i> <span class="hide-xs">Saved</span></button>
+        <button class="btn-ghost" onclick="resetAll()">Reset</button>
+      </div>
+      <div id="liveScore">0</div>
+    </div>
+  </div>
+</header>
+
+<!-- NAV -->
+<div style="border-bottom:1px solid var(--border); background:var(--surface); position:sticky; top:64px; z-index:99;">
+  <div class="container" style="padding-top:10px; padding-bottom:10px;">
+    <div class="nav-tabs" id="navTabs">
+      <button class="nav-tab active" onclick="showView('assess')">Assess</button>
+      <button class="nav-tab" onclick="showView('results')">Results</button>
+      <button class="nav-tab" onclick="showView('compare')">Compare</button>
+      <button class="nav-tab" onclick="showView('saved')">Saved Audits</button>
+      <button class="nav-tab" onclick="showView('methodology')">Methodology</button>
+    </div>
+  </div>
+</div>
+
+<main>
+
+  <!-- ══════════ VIEW: ASSESS ══════════ -->
+  <div id="view-assess" class="view active">
+    <div class="container" style="padding-top:24px;">
+
+      <!-- Subject Input -->
+      <div class="card">
+        <div class="subject-toggle">
+          <button class="toggle-btn active" onclick="setType('candidate')">👤 Candidate</button>
+          <button class="toggle-btn" onclick="setType('policy')">📄 Policy / Bill</button>
+        </div>
+
+        <div class="input-row" style="margin-bottom:10px;">
+          <div class="input-group" style="flex:2; min-width:180px;">
+            <label id="nameLabel">Candidate Name</label>
+            <input type="text" id="nameInput" placeholder="e.g. Shirley Chisholm, Prop 47...">
+          </div>
+          <div class="input-group" style="flex:1; min-width:140px;">
+            <label>Jurisdiction (optional)</label>
+            <input type="text" id="jurisdictionInput" placeholder="City / State">
+          </div>
+  
+        </div>
+
+        <div id="candidateExtras" class="input-row">
+          <div class="input-group">
+            <label>Office / Position (optional)</label>
+            <input type="text" id="officeInput" placeholder="e.g. Mayor, DA, Senate">
+          </div>
+        </div>
+        <div id="policyExtras" class="input-row" style="display:none;">
+          <div class="input-group" style="flex:1;">
+            <label>Year (optional)</label>
+            <input type="text" id="yearInput" placeholder="e.g. 1994">
+          </div>
+          <div class="input-group" style="flex:2;">
+            <label>Sponsor / Author (optional)</label>
+            <input type="text" id="sponsorInput" placeholder="Bill author">
+          </div>
+        </div>
+
+        <!-- Pathway Modifier -->
+        <div id="pathwaySection" style="margin-top:14px;">
+          <div class="section-label" style="margin-bottom:8px;">Subject Pathway</div>
+          <div class="pathway-toggle">
+            <button class="pathway-btn active" id="pw-elected" onclick="setPathway('elected')">
+              <span class="pathway-label">🏛️ Elected Official</span>
+              <span class="pathway-sub">Has or held formal office</span>
+            </button>
+            <button class="pathway-btn" id="pw-community" onclick="setPathway('community')">
+              <span class="pathway-label">✊ Community Leader</span>
+              <span class="pathway-sub">Organizer, activist, civic leader</span>
+            </button>
+          </div>
+          <div class="pathway-note" id="pathwayNote">
+            <strong style="color:var(--gold);">Community Leader Context:</strong> Fruit scores reflect documented impact through organizing, campaigns, and civic work — not legislation. Weak Fruit does not mean failure; it may mean this person operated without institutional power.
+          </div>
+        </div>
+
+        <div class="error-box" id="errorBox"></div>
+      </div>
+
+      <!-- PART 1: ROOT -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--gold-dim); color:var(--gold);"><i class="fa-solid fa-seedling"></i></div>
+          <div>
+            <div class="card-title">Part 1: The Root</div>
+            <div class="card-desc">Core Values — 5 pts each · Max 25 pts</div>
+          </div>
+        </div>
+        <div id="rootChecks">
+          <label class="check-row" id="rc0">
+            <input type="checkbox" class="custom-cb gold-cb root-cb" value="5">
+            <div><div class="check-label-title">Liberty & Anti-Carceral Stance</div><div class="check-label-desc">Advocating for reduced state interference, shifting resources from policing to community-based mental health and violence prevention.</div></div>
+          </label>
+          <label class="check-row" id="rc1">
+            <input type="checkbox" class="custom-cb gold-cb root-cb" value="5">
+            <div><div class="check-label-title">Justice & Reparations (Repair & Equity)</div><div class="check-label-desc">Pursuing and actively funding Repair & Equity — explicitly including reparations and restorative justice — not just standard equality.</div></div>
+          </label>
+          <label class="check-row" id="rc2">
+            <input type="checkbox" class="custom-cb gold-cb root-cb" value="5">
+            <div><div class="check-label-title">Solidarity & Community Agency</div><div class="check-label-desc">Siding with the people and CBOs over party establishments; ensuring community is an active partner in policy design.</div></div>
+          </label>
+          <label class="check-row" id="rc3">
+            <input type="checkbox" class="custom-cb gold-cb root-cb" value="5">
+            <div><div class="check-label-title">Safety & Holistic Housing</div><div class="check-label-desc">Viewing safety holistically — housing, healthcare, economic security — instead of just policing. Prioritizing tenant protections.</div></div>
+          </label>
+          <label class="check-row" id="rc4">
+            <input type="checkbox" class="custom-cb gold-cb root-cb" value="5">
+            <div><div class="check-label-title">Fiscal Integrity</div><div class="check-label-desc">Demonstrated commitment to choosing community needs over donor demands (The Check Receipt principle).</div></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- PART 2: BRANCHES -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--blue-dim); color:var(--blue);"><i class="fa-solid fa-bullhorn"></i></div>
+          <div>
+            <div class="card-title" id="branchTitle">Part 2: The Branches</div>
+            <div class="card-desc" id="branchDesc">Advocacy & Support — 2 pts each · Max 10 pts</div>
+          </div>
+        </div>
+        <div id="branchChecks">
+          <label class="check-row" id="bc0">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt0">Economic Transfer Advocacy</div><div class="check-label-desc" id="bd0">Actively campaigned or organized for direct wealth transfers to the community.</div></div>
+          </label>
+          <label class="check-row" id="bc1">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt1">Institutional Protection Advocacy</div><div class="check-label-desc" id="bd1">Lobbied for or supported permanent power structures or CBO funding.</div></div>
+          </label>
+          <label class="check-row" id="bc2">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt2">Housing & Homelessness Advocacy</div><div class="check-label-desc" id="bd2">Fought for tenant protections or systemic homelessness solutions.</div></div>
+          </label>
+          <label class="check-row" id="bc3">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt3">Criminal Justice Reform Advocacy</div><div class="check-label-desc" id="bd3">Supported or co-sponsored bills reducing carceral harms.</div></div>
+          </label>
+          <label class="check-row" id="bc4">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt4">Intergenerational Wealth Advocacy</div><div class="check-label-desc" id="bd4">Advocated for the creation of long-term assets and endowments.</div></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- PART 3: FRUIT -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--green-dim); color:var(--green);"><i class="fa-solid fa-apple-whole"></i></div>
+          <div>
+            <div class="card-title">Part 3: The Fruit</div>
+            <div class="card-desc">Deliverables & Outcomes — 0–3 pts each · Max 15 pts</div>
+          </div>
+        </div>
+        <div id="fruitSliders">
+          <div class="slider-card">
+            <div class="slider-top">
+              <span class="slider-name">Economic Transfer & Wealth Creation</span>
+              <span class="slider-pts green" id="fs0">0 pts</span>
+            </div>
+            <div class="slider-subdesc">Moving money/assets directly to Black hands, creating tangible wealth policies.</div>
+            <input type="range" min="0" max="3" value="0" step="1" class="green-range fruit-sl" data-idx="0">
+            <div class="slider-ticks"><span>None</span><span>Talk</span><span>Pilot</span><span>Full Law</span></div>
+          </div>
+          <div class="slider-card">
+            <div class="slider-top">
+              <span class="slider-name">Institutional Protection & Community Dev.</span>
+              <span class="slider-pts" id="fs1">0 pts</span>
+            </div>
+            <div class="slider-subdesc">Creating permanent power structures AND securing direct funding for CBOs/faith-based projects.</div>
+            <input type="range" min="0" max="3" value="0" step="1" class="green-range fruit-sl" data-idx="1">
+            <div class="slider-ticks"><span>None</span><span>Talk</span><span>Weak</span><span>Strong</span></div>
+          </div>
+          <div class="slider-card">
+            <div class="slider-top">
+              <span class="slider-name">Housing & Homelessness Mitigation</span>
+              <span class="slider-pts" id="fs2">0 pts</span>
+            </div>
+            <div class="slider-subdesc">Stopping immediate harms AND measurable reduction in Black homelessness.</div>
+            <input type="range" min="0" max="3" value="0" step="1" class="green-range fruit-sl" data-idx="2">
+            <div class="slider-ticks"><span>Failed</span><span>Tried</span><span>Partial</span><span>Solved</span></div>
+          </div>
+          <div class="slider-card">
+            <div class="slider-top">
+              <span class="slider-name">Criminal Justice Reform</span>
+              <span class="slider-pts" id="fs3">0 pts</span>
+            </div>
+            <div class="slider-subdesc">Legislation reducing mandatory minimums, expanding re-entry, or officer accountability.</div>
+            <input type="range" min="0" max="3" value="0" step="1" class="green-range fruit-sl" data-idx="3">
+            <div class="slider-ticks"><span>None</span><span>Talk</span><span>Partial</span><span>Passed</span></div>
+          </div>
+          <div class="slider-card">
+            <div class="slider-top">
+              <span class="slider-name">Intergenerational Wealth</span>
+              <span class="slider-pts" id="fs4">0 pts</span>
+            </div>
+            <div class="slider-subdesc">Creating assets (land, endowments, agencies) that survive beyond their term.</div>
+            <input type="range" min="0" max="3" value="0" step="1" class="green-range fruit-sl" data-idx="4">
+            <div class="slider-ticks"><span>No</span><span>Unlikely</span><span>Likely</span><span>Yes</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PART 4: VISIBILITY -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--orange-dim); color:var(--orange);"><i class="fa-solid fa-sun"></i></div>
+          <div>
+            <div class="card-title">Part 4: The Light</div>
+            <div class="card-desc">Public Visibility & Transparency — 0–10 pts</div>
+          </div>
+        </div>
+        <div class="slider-card">
+          <div class="slider-top">
+            <span class="slider-name">Information Availability</span>
+            <span class="slider-pts" id="visScore" style="color:var(--orange);">0 pts</span>
+          </div>
+          <div class="slider-subdesc">How well-documented is this subject's record? Includes voting history, legislative activity, organizing history, civic leadership, public statements, journalism, and community engagement — all count equally.</div>
+          <input type="range" min="0" max="10" value="0" step="1" class="orange-range" id="visSlider">
+          <div class="slider-ticks"><span>Obscure (0)</span><span>Moderate (5)</span><span>Highly Visible (10)</span></div>
+        </div>
+      </div>
+
+      <!-- PART 5: TOXIC SOIL -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--red-dim); color:var(--red);"><i class="fa-solid fa-skull-crossbones"></i></div>
+          <div>
+            <div class="card-title">Part 5: Toxic Soil</div>
+            <div class="card-desc">Penalties — deducted from total</div>
+          </div>
+        </div>
+        <div style="background:rgba(200,169,110,0.06); border:1px solid rgba(200,169,110,0.2); border-radius:8px; padding:12px 14px; margin-bottom:16px; font-size:12px; color:var(--text-dim); line-height:1.6;">
+          <strong style="color:var(--gold);">Note:</strong> <span id="toxicNote">An official operating from a minority legislative position may have a bill fail due to power dynamics, not betrayal. Score accordingly.</span>
+        </div>
+        <div>
+          <label class="toxic-row" id="tx0">
+            <input type="checkbox" class="custom-cb red-cb toxic-cb" value="3">
+            <div style="flex:1;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="check-label-title" id="tt0" style="color:var(--red);">The Gatekeeper</span>
+                <span class="toxic-pts">−3 pts</span>
+              </div>
+              <div class="check-label-desc" id="td0">Blocking other Black leaders to protect their position.</div>
+            </div>
+          </label>
+          <label class="toxic-row" id="tx1">
+            <input type="checkbox" class="custom-cb red-cb toxic-cb" value="4">
+            <div style="flex:1;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="check-label-title" id="tt1" style="color:var(--red);">The Plantation</span>
+                <span class="toxic-pts">−4 pts</span>
+              </div>
+              <div class="check-label-desc" id="td1">Taking money from harmful industries (private prisons, predatory lenders, etc.).</div>
+            </div>
+          </label>
+          <label class="toxic-row" id="tx2">
+            <input type="checkbox" class="custom-cb red-cb toxic-cb" value="8">
+            <div style="flex:1;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="check-label-title" id="tt2" style="color:var(--red);">The Betrayal</span>
+                <span class="toxic-pts">−8 pts</span>
+              </div>
+              <div class="check-label-desc" id="td2">Vetoing or actively killing a bill they publicly promised to support.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: RESULTS ══════════ -->
+  <div id="view-results" class="view">
+    <div class="container" style="padding-top:24px;">
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+          <div>
+            <div class="section-label">Subject</div>
+            <div id="resultsName" style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:0.05em;">—</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="section-label">Verdict</div>
+            <div id="resultsVerdict" style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:0.05em;">UNGRADED</div>
+          </div>
+        </div>
+
+        <!-- Radar Chart -->
+        <div style="position:relative;max-width:360px;margin:0 auto 24px;">
+          <canvas id="radarChart"></canvas>
+        </div>
+
+        <!-- Score Breakdown -->
+        <div class="score-grid">
+          <div class="score-cell">
+            <div class="score-cell-label">🌱 Root (Values)</div>
+            <div class="score-cell-value" id="sc-root" style="color:var(--gold);">0</div>
+            <div class="score-cell-max">/ 25</div>
+            <div class="score-cell-bar"><div class="score-cell-fill" id="sb-root" style="width:0%;background:var(--gold);"></div></div>
+          </div>
+          <div class="score-cell">
+            <div class="score-cell-label">📣 Branches</div>
+            <div class="score-cell-value" id="sc-branch" style="color:var(--blue);">0</div>
+            <div class="score-cell-max">/ 10</div>
+            <div class="score-cell-bar"><div class="score-cell-fill" id="sb-branch" style="width:0%;background:var(--blue);"></div></div>
+          </div>
+          <div class="score-cell">
+            <div class="score-cell-label">🍎 Fruit (Outcomes)</div>
+            <div class="score-cell-value" id="sc-fruit" style="color:var(--green);">0</div>
+            <div class="score-cell-max">/ 15</div>
+            <div class="score-cell-bar"><div class="score-cell-fill" id="sb-fruit" style="width:0%;background:var(--green);"></div></div>
+          </div>
+          <div class="score-cell">
+            <div class="score-cell-label">☀️ Visibility</div>
+            <div class="score-cell-value" id="sc-vis" style="color:var(--orange);">0</div>
+            <div class="score-cell-max">/ 10</div>
+            <div class="score-cell-bar"><div class="score-cell-fill" id="sb-vis" style="width:0%;background:var(--orange);"></div></div>
+          </div>
+          <div class="score-cell" style="grid-column:1/-1;">
+            <div class="score-cell-label">☠️ Toxic Penalties</div>
+            <div class="score-cell-value" id="sc-toxic" style="color:var(--red);">−0</div>
+            <div class="score-cell-max">deducted</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Verdict Description -->
+      <div class="card" id="verdictCard">
+        <div class="section-label">Verdict Breakdown</div>
+        <div id="verdictDesc" style="font-size:14px;color:var(--text-dim);line-height:1.7;margin-top:8px;"></div>
+      </div>
+
+      <!-- Share Card -->
+      <div class="card">
+        <div class="section-label" style="margin-bottom:12px;">Shareable Result Card</div>
+        <div class="share-card-wrap">
+          <div class="share-card-preview">
+            <canvas id="shareCardCanvas" width="600" height="315"></canvas>
+          </div>
+          <div class="share-card-actions">
+            <button class="btn-action btn-primary" style="flex:1;" onclick="downloadShareCard()"><i class="fa-solid fa-image"></i> Download Image</button>
+            <button class="btn-action btn-secondary" style="flex:1;" onclick="shareAudit()"><i class="fa-solid fa-link"></i> Copy Link</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: COMPARE ══════════ -->
+  <div id="view-compare" class="view">
+    <div class="container-wide" style="padding-top:24px;">
+
+      <div class="card" style="margin-bottom:20px;">
+        <div class="section-label">Compare Two Subjects</div>
+        <p style="font-size:13px;color:var(--text-dim);margin-top:4px;margin-bottom:16px;">Load any two saved audits side by side to compare their scores.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <select id="compareA" style="flex:1;min-width:180px;">
+            <option value="">— Select Subject A —</option>
+          </select>
+          <select id="compareB" style="flex:1;min-width:180px;">
+            <option value="">— Select Subject B —</option>
+          </select>
+          <button class="btn-analyze" onclick="runComparison()"><i class="fa-solid fa-scale-balanced"></i> Compare</button>
+        </div>
+      </div>
+
+      <div id="compareResult" style="display:none;">
+        <div class="compare-grid" id="compareGrid"></div>
+      </div>
+      <div id="compareEmpty" style="text-align:center;padding:60px 20px;color:var(--text-dim);">
+        <i class="fa-solid fa-scale-balanced" style="font-size:40px;opacity:0.2;display:block;margin-bottom:16px;"></i>
+        Save two or more audits to compare them here.
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: SAVED ══════════ -->
+  <div id="view-saved" class="view">
+    <div class="container" style="padding-top:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:0.05em;">Saved Audits</div>
+          <div style="font-size:12px;color:var(--text-dim);">Stored in your browser — <span id="savedCount">0</span> audit(s)</div>
+        </div>
+        <button class="btn-ghost" onclick="clearAllSaved()">Clear All</button>
+      </div>
+      <div id="savedList"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: METHODOLOGY ══════════ -->
+  <div id="view-methodology" class="view">
+    <div class="container" style="padding-top:24px;">
+
+      <div class="card">
+        <div class="method-section">
+          <div class="method-section-title" style="color:var(--gold);">What Is Root & Fruit?</div>
+          <div class="method-body">
+            <p>Root & Fruit is a community-built integrity framework for evaluating political candidates and policies through the lens of Black social justice. It was designed in response to a persistent gap in voter education tools: most scoring systems reward proximity to power, not actual community impact.</p>
+            <p>The framework asks a different question: <strong>By their fruits, shall you know them.</strong> Not their party, not their rhetoric — their record.</p>
+          </div>
+        </div>
+
+        <div class="method-section">
+          <div class="method-section-title">The Five Pillars</div>
+          <div class="method-pillar-row">
+            <div class="method-pillar-icon">🌱</div>
+            <div><div class="method-pillar-title" style="color:var(--gold);">The Root — Core Values (25 pts)</div>
+            <div class="method-pillar-desc">Evaluates the foundational worldview: anti-carceral stance, commitment to reparations and repair, solidarity with community over party, holistic safety (housing, health, economic security), and fiscal integrity. These are binary — either the evidence supports it or it doesn't.</div></div>
+          </div>
+          <div class="method-pillar-row">
+            <div class="method-pillar-icon">📣</div>
+            <div><div class="method-pillar-title" style="color:var(--blue);">The Branches — Advocacy (10 pts)</div>
+            <div class="method-pillar-desc">Grants credit for active advocacy and organizing even when institutional power wasn't available. A candidate who fought for wealth transfer, CBO funding, housing, criminal justice reform, and intergenerational assets — but couldn't get it passed — still earns these points.</div></div>
+          </div>
+          <div class="method-pillar-row">
+            <div class="method-pillar-icon">🍎</div>
+            <div><div class="method-pillar-title" style="color:var(--green);">The Fruit — Outcomes (15 pts)</div>
+            <div class="method-pillar-desc">The hardest section. Scores actual deliverables on a 0–3 scale across five areas. A score of 3 means something was fully enacted, funded, and measurable. For community leaders, fruit is assessed through documented organizing wins, policy shifts they influenced, and lasting institutional change — not just legislation.</div></div>
+          </div>
+          <div class="method-pillar-row">
+            <div class="method-pillar-icon">☀️</div>
+            <div><div class="method-pillar-title" style="color:var(--orange);">The Light — Visibility (10 pts)</div>
+            <div class="method-pillar-desc">Reflects how well-documented the subject's record is — across all evidence types: voting history, organizing records, journalism, public statements, and civic leadership. A community organizer with a rich documented record scores equally to an elected official. Low scores only reflect genuinely sparse evidence.</div></div>
+          </div>
+          <div class="method-pillar-row">
+            <div class="method-pillar-icon">☠️</div>
+            <div><div class="method-pillar-title" style="color:var(--red);">Toxic Soil — Penalties (deducted)</div>
+            <div class="method-pillar-desc">Three hard penalties for documented betrayal: Gatekeeper (−3, blocking other Black leaders), Plantation (−4, taking money from harmful industries), and Betrayal (−8, vetoing or killing a bill they promised to support). These are only applied with clear evidence.</div></div>
+          </div>
+        </div>
+
+        <div class="method-section">
+          <div class="method-section-title">Verdict Tiers</div>
+          <table class="verdict-table">
+            <thead><tr><th>Score</th><th>Candidate Verdict</th><th>Policy Verdict</th></tr></thead>
+            <tbody>
+              <tr><td><span style="color:var(--green);font-weight:700;">52–60</span></td><td style="color:var(--green);">The Vanguard</td><td style="color:var(--green);">Transformative Law</td></tr>
+              <tr><td><span style="color:#6eddb5;font-weight:700;">42–51</span></td><td style="color:#6eddb5;">The Worker</td><td style="color:#6eddb5;">Progressive Reform</td></tr>
+              <tr><td><span style="color:var(--blue);font-weight:700;">32–41</span></td><td style="color:var(--blue);">The Pragmatist</td><td style="color:var(--blue);">Incremental Reform</td></tr>
+              <tr><td><span style="color:var(--gold);font-weight:700;">20–31</span></td><td style="color:var(--gold);">The Politician</td><td style="color:var(--gold);">Maintenance Bill</td></tr>
+              <tr><td><span style="color:var(--orange);font-weight:700;">10–19</span></td><td style="color:var(--orange);">The Obstacle</td><td style="color:var(--orange);">Harmful Policy</td></tr>
+              <tr><td><span style="color:var(--red);font-weight:700;">0–9</span></td><td style="color:var(--red);">The Opposition</td><td style="color:var(--red);">Detrimental Policy</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="method-section">
+          <div class="method-section-title">The Two Pathways</div>
+          <div class="method-body">
+            <p><strong>Elected Officials</strong> are assessed on their voting record, sponsored legislation, budget decisions, and institutional deliverables. Having power and failing to deliver is treated differently from advocating without power.</p>
+            <p><strong>Community Leaders</strong> — organizers, activists, civic leaders, and non-electoral figures — are assessed on their documented advocacy record: campaigns led, coalitions built, policies influenced, and community impact achieved. The Auto-Analyze engine is explicitly instructed to weight civic records on equal footing with legislative records.</p>
+          </div>
+        </div>
+
+        <div class="method-section">
+          <div class="method-section-title">Disclaimer</div>
+          <div class="disclaimer-box">
+            <strong>Root & Fruit is a community framework, not a definitive judgment.</strong> Auto-analysis is powered by Claude (Anthropic) and draws on publicly available information up to its knowledge cutoff. AI-generated assessments may contain errors, omissions, or reflect the limits of available public documentation. All scores should be treated as a starting point for research — not a final verdict. Users are encouraged to review cited sources, apply their own judgment, and adjust scores manually where needed.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- STICKY FOOTER -->
+<div class="sticky-footer">
+  <div class="footer-inner">
+    <div class="verdict-row">
+      <div>
+        <div class="verdict-label">Final Verdict</div>
+        <div id="verdictTitle">UNGRADED</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="score-label">Total Score</div>
+        <div id="finalScore">0<span class="score-max">/60</span></div>
+      </div>
+    </div>
+    <div class="footer-actions">
+      <button class="btn-action btn-primary" onclick="saveAudit()"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      <button class="btn-action btn-secondary" onclick="copyReport()"><i class="fa-solid fa-copy"></i> Copy</button>
+      <button class="btn-action btn-secondary" onclick="shareAudit()"><i class="fa-solid fa-link"></i> Share</button>
+      <button class="btn-action btn-secondary" onclick="exportPDF()"><i class="fa-solid fa-file-pdf"></i> PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════
+let subjectType = 'candidate';
+let radarChart = null;
+
+const scores = { root:0, branch:0, fruit:0, vis:0, toxic:0 };
+const MAX = { root:25, branch:10, fruit:15, vis:10 };
+
+// ──────────── DOM refs ────────────
+const rootCBs = document.querySelectorAll('.root-cb');
+const branchCBs = document.querySelectorAll('.branch-cb');
+const fruitSls = document.querySelectorAll('.fruit-sl');
+const toxicCBs = document.querySelectorAll('.toxic-cb');
+const visSlider = document.getElementById('visSlider');
+
+// ══════════════════════════════════════════════
+//  SUBJECT TYPE TOGGLE
+// ══════════════════════════════════════════════
+function setType(t) {
+  subjectType = t;
+  document.querySelectorAll('.toggle-btn').forEach((b,i) => b.classList.toggle('active', (i===0 && t==='candidate')||(i===1 && t==='policy')));
+  document.getElementById('nameLabel').textContent = t === 'candidate' ? 'Candidate Name' : 'Policy / Bill Name';
+  document.getElementById('nameInput').placeholder = t === 'candidate' ? 'e.g. Shirley Chisholm...' : 'e.g. Prop 47, BREATHE Act...';
+  document.getElementById('candidateExtras').style.display = t === 'candidate' ? 'flex' : 'none';
+  document.getElementById('policyExtras').style.display = t === 'policy' ? 'flex' : 'none';
+
+  if (t === 'candidate') {
+    document.getElementById('branchTitle').textContent = 'Part 2: The Branches';
+    document.getElementById('branchDesc').textContent = 'Advocacy & Support — 2 pts each · Max 10 pts';
+    setBranchLabels(['Economic Transfer Advocacy','Institutional Protection Advocacy','Housing & Homelessness Advocacy','Criminal Justice Reform Advocacy','Intergenerational Wealth Advocacy'],
+      ['Actively campaigned or organized for direct wealth transfers to the community.','Lobbied for or supported permanent power structures or CBO funding.','Fought for tenant protections or systemic homelessness solutions.','Supported or co-sponsored bills reducing carceral harms.','Advocated for the creation of long-term assets and endowments.']);
+    document.getElementById('toxicNote').textContent = 'An official operating from a minority legislative position may have a bill fail due to power dynamics, not betrayal. Score accordingly.';
+    document.getElementById('tt0').textContent = 'The Gatekeeper'; document.getElementById('td0').textContent = 'Blocking other Black leaders to protect their position.';
+    document.getElementById('tt1').textContent = 'The Plantation'; document.getElementById('td1').textContent = 'Taking money from harmful industries (private prisons, predatory lenders, etc.).';
+    document.getElementById('tt2').textContent = 'The Betrayal'; document.getElementById('td2').textContent = 'Vetoing or actively killing a bill they publicly promised to support.';
+  } else {
+    document.getElementById('branchTitle').textContent = 'Part 2: The Branches (Scope)';
+    document.getElementById('branchDesc').textContent = 'Legislative Mechanisms — 2 pts each · Max 10 pts';
+    setBranchLabels(['Economic Transfer Mechanisms','Institutional Protection Mechanisms','Housing & Homelessness Solutions','Criminal Justice Reform Mechanisms','Intergenerational Wealth Structures'],
+      ['Includes explicit provisions or pathways for direct wealth transfers to the community.','Codifies permanent power structures, oversight boards, or direct CBO funding.','Establishes tenant protections, funding, or systemic homelessness solutions.','Includes language reducing carceral harms, mandatory minimums, or increasing accountability.','Creates long-term assets (endowments, land trusts) that survive political cycles.']);
+    document.getElementById('toxicNote').textContent = 'Look for structural flaws, corporate carve-outs, and enforcement gaps that undermine the stated intent of the legislation.';
+    document.getElementById('tt0').textContent = 'The Carve-Out'; document.getElementById('td0').textContent = 'Exempts bad actors or preserves harmful corporate loopholes.';
+    document.getElementById('tt1').textContent = 'The Trojan Horse'; document.getElementById('td1').textContent = 'Includes hidden punitive measures or preempts local progressive laws.';
+    document.getElementById('tt2').textContent = 'The Unfunded Mandate'; document.getElementById('td2').textContent = 'Promises change but provides zero funding or enforcement mechanisms.';
+  }
+}
+function setBranchLabels(titles, descs) {
+  titles.forEach((t,i) => { document.getElementById('bt'+i).textContent = t; document.getElementById('bd'+i).textContent = descs[i]; });
+}
+
+// ══════════════════════════════════════════════
+//  VIEW SWITCHING
+// ══════════════════════════════════════════════
+function showView(v) {
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  const tabs = ['assess','results','compare','saved'];
+  const idx = tabs.indexOf(v);
+  if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+  if (v === 'results') updateResultsView();
+  if (v === 'saved') renderSavedList();
+  if (v === 'compare') populateCompareSelects();
+}
+
+// ══════════════════════════════════════════════
+//  CALCULATE
+// ══════════════════════════════════════════════
+function calculate() {
+  scores.root = 0; rootCBs.forEach(c => { if(c.checked) scores.root += +c.value; updateRowState('rc', Array.from(rootCBs).indexOf(c), c.checked, 'gold'); });
+  scores.branch = 0; branchCBs.forEach(c => { if(c.checked) scores.branch += +c.value; updateRowState('bc', Array.from(branchCBs).indexOf(c), c.checked, 'blue'); });
+  scores.fruit = 0;
+  fruitSls.forEach((s,i) => {
+    const v = +s.value; scores.fruit += v;
+    const el = document.getElementById('fs'+i);
+    el.textContent = v + ' pts';
+    el.style.color = v === 0 ? 'var(--text-dimmer)' : v === 3 ? 'var(--green)' : 'var(--gold)';
+  });
+  scores.vis = +visSlider.value;
+  document.getElementById('visScore').textContent = scores.vis + ' pts';
+  scores.toxic = 0; toxicCBs.forEach((c,i) => {
+    if(c.checked) { scores.toxic += +c.value; document.getElementById('tx'+i).classList.add('active'); }
+    else { document.getElementById('tx'+i).classList.remove('active'); }
+  });
+
+  const total = Math.max(0, scores.root + scores.branch + scores.fruit + scores.vis - scores.toxic);
+  const { title, color } = getVerdict(total);
+
+  document.getElementById('finalScore').innerHTML = `${total}<span class="score-max">/60</span>`;
+  document.getElementById('finalScore').style.color = color;
+  document.getElementById('verdictTitle').textContent = title;
+  document.getElementById('verdictTitle').style.color = color;
+  document.getElementById('liveScore').textContent = total;
+  document.getElementById('liveScore').style.color = color;
+  document.getElementById('liveScore').classList.add('pulse-score');
+  setTimeout(() => document.getElementById('liveScore').classList.remove('pulse-score'), 300);
+
+  return total;
+}
+
+function updateRowState(prefix, i, checked, color) {
+  const el = document.getElementById(prefix+i);
+  if (!el) return;
+  el.classList.remove('checked-gold','checked-blue','checked-red');
+  if (checked) el.classList.add('checked-'+color);
+}
+
+function getVerdict(score) {
+  if (score >= 52) return { title: subjectType === 'candidate' ? 'THE VANGUARD' : 'TRANSFORMATIVE LAW', color: 'var(--green)', desc: 'A rare, exemplary record. This subject has demonstrated extraordinary commitment to structural change, consistently prioritizing community over politics, and delivering measurable, lasting outcomes.' };
+  if (score >= 42) return { title: subjectType === 'candidate' ? 'THE WORKER' : 'PROGRESSIVE REFORM', color: '#6eddb5', desc: 'A strong, consistent record of action. Not perfect, but genuinely committed — with real deliverables that moved the needle in meaningful ways.' };
+  if (score >= 32) return { title: subjectType === 'candidate' ? 'THE PRAGMATIST' : 'INCREMENTAL REFORM', color: 'var(--blue)', desc: 'Mixed record with genuine effort. Some real wins alongside missed opportunities. Context matters — evaluate whether limitations were structural or personal.' };
+  if (score >= 20) return { title: subjectType === 'candidate' ? 'THE POLITICIAN' : 'MAINTENANCE BILL', color: 'var(--gold)', desc: 'More talk than action. Adequate on the surface, but the record shows more alignment with institutional comfort than genuine structural challenge.' };
+  if (score >= 10) return { title: subjectType === 'candidate' ? 'THE OBSTACLE' : 'HARMFUL POLICY', color: 'var(--orange)', desc: 'Actively worked against the interests of the community, whether by commission or omission. The harm is real, even if the intent was complex.' };
+  return { title: subjectType === 'candidate' ? 'THE OPPOSITION' : 'DETRIMENTAL POLICY', color: 'var(--red)', desc: 'A clear record of harm. Whether through betrayal, complicity with oppressive systems, or blocking progress — the evidence speaks for itself.' };
+}
+
+// ══════════════════════════════════════════════
+//  RESULTS VIEW
+// ══════════════════════════════════════════════
+function updateResultsView() {
+  const total = calculate();
+  const name = document.getElementById('nameInput').value || '—';
+  const { title, color, desc } = getVerdict(total);
+
+  document.getElementById('resultsName').textContent = name;
+  document.getElementById('resultsVerdict').textContent = title;
+  document.getElementById('resultsVerdict').style.color = color;
+  document.getElementById('verdictDesc').textContent = desc;
+
+  // Score cells
+  document.getElementById('sc-root').textContent = scores.root;
+  document.getElementById('sc-branch').textContent = scores.branch;
+  document.getElementById('sc-fruit').textContent = scores.fruit;
+  document.getElementById('sc-vis').textContent = scores.vis;
+  document.getElementById('sc-toxic').textContent = '−' + scores.toxic;
+  document.getElementById('sb-root').style.width = (scores.root/MAX.root*100) + '%';
+  document.getElementById('sb-branch').style.width = (scores.branch/MAX.branch*100) + '%';
+  document.getElementById('sb-fruit').style.width = (scores.fruit/MAX.fruit*100) + '%';
+  document.getElementById('sb-vis').style.width = (scores.vis/MAX.vis*100) + '%';
+
+  drawRadar(scores.root, scores.branch, scores.fruit, scores.vis, scores.toxic);
+}
+
+function drawRadar(root, branch, fruit, vis, toxic) {
+  const canvas = document.getElementById('radarChart');
+  const ctx = canvas.getContext('2d');
+  const size = Math.min(canvas.parentElement.offsetWidth, 360);
+  canvas.width = size; canvas.height = size;
+  const cx = size/2, cy = size/2, r = size*0.38;
+
+  const labels = ['Root', 'Branches', 'Fruit', 'Light', 'Clean'];
+  const vals = [root/25, branch/10, fruit/15, vis/10, 1-(toxic/15)];
+  const colors = ['#c8a96e','#5ba3f5','#52d48a','#f0913a','#e85555'];
+  const n = 5;
+
+  ctx.clearRect(0,0,size,size);
+
+  // Grid
+  for (let ring = 1; ring <= 5; ring++) {
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const angle = (i/n)*Math.PI*2 - Math.PI/2;
+      const rr = r*(ring/5);
+      const x = cx + Math.cos(angle)*rr, y = cy + Math.sin(angle)*rr;
+      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Spokes
+  for (let i = 0; i < n; i++) {
+    const angle = (i/n)*Math.PI*2 - Math.PI/2;
+    ctx.beginPath(); ctx.moveTo(cx,cy);
+    ctx.lineTo(cx+Math.cos(angle)*r, cy+Math.sin(angle)*r);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Fill
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const angle = (i/n)*Math.PI*2 - Math.PI/2;
+    const rv = r * Math.max(0, Math.min(1, vals[i]));
+    const x = cx + Math.cos(angle)*rv, y = cy + Math.sin(angle)*rv;
+    i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(200,169,110,0.12)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(200,169,110,0.6)'; ctx.lineWidth = 2; ctx.stroke();
+
+  // Dots + labels
+  for (let i = 0; i < n; i++) {
+    const angle = (i/n)*Math.PI*2 - Math.PI/2;
+    const rv = r * Math.max(0, Math.min(1, vals[i]));
+    const x = cx + Math.cos(angle)*rv, y = cy + Math.sin(angle)*rv;
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
+    ctx.fillStyle = colors[i]; ctx.fill();
+
+    const lx = cx + Math.cos(angle)*(r+22), ly = cy + Math.sin(angle)*(r+22);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = `500 11px "DM Sans", sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(labels[i], lx, ly);
+  }
+}
+
+// ══════════════════════════════════════════════
+//  CLAUDE API AUTO-ANALYZE
+// ══════════════════════════════════════════════
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║                  ⚠️  LOCKED PROMPT — DO NOT MODIFY  ⚠️           ║
+// ║                                                                  ║
+// ║  This prompt is the confirmed working baseline as of the         ║
+// ║  session where Billion Godson was accurately evaluated.          ║
+// ║                                                                  ║
+// ║  Any change to this function MUST be:                            ║
+// ║    1. Explicitly agreed upon before editing                      ║
+// ║    2. Tested against Billion Godson immediately after            ║
+// ║    3. Rolled back if the result regresses                        ║
+// ║                                                                  ║
+// ║  Do NOT modify this function as a side effect of other changes.  ║
+// ╚══════════════════════════════════════════════════════════════════╝
+function buildAuditPrompt(target, isCandidate, isCommunity) {
+  return `You are the Integrity Index Auditor, a strict historical analyst.
+Your job is to conduct a FORENSIC AUDIT of the Subject: "${target}".
+
+Do not provide vague summaries. You must score them on the specific criteria below and provide specific HISTORICAL EVIDENCE (Bills, Votes, Quotes, Organizing Campaigns, Civic Actions, Community Impact) for EVERY SINGLE POINT.
+
+**CRITICAL CONTEXT**: Consider the full spectrum of leadership. An elected official is evaluated on legislation and votes. A community leader, organizer, or activist is evaluated equally rigorously on their organizing record, coalitions built, institutions created, policy shifts they drove, and documented community impact. Both pathways are valid and equally weighted in this framework. Do NOT default to low scores for community leaders simply because they lack a voting record — their civic record IS their record.
+
+Also provide a brief but substantive historical background (2-3 paragraphs) covering who this person is, their key contributions, and why their work matters. List notable endorsements/supporters and prominent opposition.
+
+CRITERIA & SCORING:
+
+1. ROOT (Values) - Yes/No (Boolean)
+   - Liberty & Anti-Carceral Stance: Advocating reduced state interference, shifting resources from policing to mental health/violence prevention.
+   - Justice & Reparations: Pursuing/funding "Repair & Equity" (reparations/restorative justice) vs standard equality.
+   - Solidarity & Community Agency: Siding with "The People" and CBOs over "The Party", making community an active partner.
+   - Safety & Holistic Housing: Viewing safety as housing/healthcare/economic security; prioritizing tenant protections.
+   - Fiscal Integrity: Choosing community needs over donor demands.
+
+2. BRANCHES (Advocacy) - Yes/No (Boolean)
+   - Economic Transfer Advocacy: Actively campaigned, organized, or fought for direct wealth transfers to the community.
+   - Institutional Protection Advocacy: Lobbied for, built, or supported permanent power structures or CBO funding.
+   - Housing Advocacy: Fought for tenant protections or homelessness solutions.
+   - Justice Reform Advocacy: Supported, organized for, or co-sponsored efforts reducing carceral harms.
+   - Intergenerational Wealth Advocacy: Advocated for long-term asset creation.
+
+3. FRUIT (Results) - Score 0-3 (Integer)
+   For elected officials: score based on legislation, budgets, and institutional outcomes.
+   For community leaders and organizers: score based on documented organizing wins, institutions built, policy shifts driven, resources moved, and lasting community impact. A score of 2-3 is appropriate for a community leader with a strong documented record of tangible impact — do not require legislation to score above 1.
+   - Economic Transfer & Wealth Creation (0=No impact, 1=Raised awareness/early effort, 2=Concrete resources moved or policy shifted, 3=Lasting funded program or systemic change)
+   - Institutional Protection & Community Dev (0=None, 1=Informal/temporary, 2=Established but fragile, 3=Permanent funded community-controlled structure)
+   - Housing & Homelessness Mitigation (0=No engagement, 1=Advocacy without wins, 2=Partial wins, 3=Sustained measurable reduction)
+   - Criminal Justice Reform (0=No impact, 1=Public awareness/pressure, 2=Policy or practice shifted, 3=Legislation passed or systemic change)
+   - Intergenerational Wealth (0=No legacy, 1=Unlikely to endure, 2=Probable lasting impact, 3=Confirmed enduring asset or institution)
+
+4. PUBLIC VISIBILITY - Score 0-10 (Integer)
+   Reflects the richness of available documentation — voting records, journalism (local AND national), organizing records, speeches, social media presence, academic coverage, community testimony. A well-documented community organizer or civic leader should score 5-8. Only score below 4 if evidence is genuinely sparse across ALL of these categories.
+
+5. TOXIC (Penalties) - Yes/No (Boolean)
+   ${isCandidate ? `- Gatekeeper: Blocked other Black leaders to protect their position.
+   - Plantation: Took money from Private Prisons or harmful industries.
+   - Betrayal: Vetoed or killed a bill/cause they promised to support.` : `- The Carve-Out: Exempts bad actors or preserves harmful corporate loopholes.
+   - The Trojan Horse: Hidden punitive measures or preempts local progressive laws.
+   - The Unfunded Mandate: Promises change but provides zero funding or enforcement.`}
+
+6. EVIDENCE QUALITY - Score 0-100 (Integer)
+   This is NOT a measure of electoral prominence. It measures the richness and consistency of available evidence across ALL record types: voting records, organizing history, journalism, public statements, civic leadership, community testimony. A community organizer with a rich documented record scores just as high as an elected official with a voting record. Only score below 40 if the subject is genuinely obscure with minimal documentation of any kind.
+
+You MUST include specific sources in the 'sources' array. For each source include category (National/Local/Independent/Unsubstantiated) and biasRating (1=Extreme Left, 5=Neutral, 10=Extreme Right).
+
+RETURN JSON ONLY:
+{
+  "historicalBackground": "2-3 substantive paragraphs — rich and specific, do not truncate",
+  "supporters": ["Supporter 1", "Supporter 2"],
+  "opponents": ["Opponent 1"],
+  "root": [
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"}
+  ],
+  "branches": [
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"},
+    {"met": boolean, "reasoning": "specific evidence"}
+  ],
+  "fruit": [
+    {"score": 0, "reasoning": "specific documented impact"},
+    {"score": 0, "reasoning": "specific documented impact"},
+    {"score": 0, "reasoning": "specific documented impact"},
+    {"score": 0, "reasoning": "specific documented impact"},
+    {"score": 0, "reasoning": "specific documented impact"}
+  ],
+  "visibility": {"score": 0, "reasoning": "explanation"},
+  "toxic": [
+    {"present": boolean, "reasoning": "evidence or lack thereof"},
+    {"present": boolean, "reasoning": "evidence or lack thereof"},
+    {"present": boolean, "reasoning": "evidence or lack thereof"}
+  ],
+  "evidenceQuality": 0,
+  "summary": "high-level executive summary, 2-3 sentences",
+  "sources": [
+    {"title": "Source title", "url": "URL or N/A", "category": "National", "biasRating": 5}
+  ]
+}`;
+}
+// ── END LOCKED PROMPT ────────────────────────────────────────────────
+
+async function autoAnalyze() {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { showToast('Enter a name first'); return; }
+
+  const jurisdiction = document.getElementById('jurisdictionInput').value.trim();
+  const office = document.getElementById('officeInput').value.trim();
+  const year = document.getElementById('yearInput').value.trim();
+  const sponsor = document.getElementById('sponsorInput').value.trim();
+
+  let target = name;
+  const extras = [];
+  if (jurisdiction) extras.push('Jurisdiction: ' + jurisdiction);
+  if (subjectType === 'candidate' && office) extras.push('Office: ' + office);
+  if (subjectType === 'policy' && year) extras.push('Year: ' + year);
+  if (subjectType === 'policy' && sponsor) extras.push('Sponsor: ' + sponsor);
+  if (extras.length) target += ' (' + extras.join(', ') + ')';
+
+  setLoading(true);
+  resetChecks();
+  document.getElementById('errorBox').style.display = 'none';
+  document.getElementById('auditBox').style.display = 'none';
+  document.getElementById('confidenceWrap').style.display = 'none';
+
+  const isCandidate = subjectType === 'candidate';
+  const isCommunity = currentPathway === 'community';
+  const systemPrompt = buildAuditPrompt(target, isCandidate, isCommunity);
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 6000,
+        system: `You are the Integrity Index Auditor. Return ONLY valid JSON — no markdown fences, no prose before or after. Never truncate historicalBackground — it must be 2-3 full substantive paragraphs. For community leaders, civic and organizing records carry equal weight to legislative records when scoring Fruit and Evidence Quality.`,
+        messages: [{ role: 'user', content: systemPrompt }]
+      })
+    });
+
+    if (!response.ok) throw new Error('API Error ' + response.status);
+    const data = await response.json();
+    let text = data.content.map(b => b.text || '').join('');
+    text = text.replace(/```json/g,'').replace(/```/g,'').trim();
+    const parsed = JSON.parse(text);
+    lastAnalysisData = parsed;
+    await applyAnalysis(parsed);
+
+  } catch(err) {
+    console.error(err);
+    document.getElementById('errorBox').textContent = 'Audit failed: ' + err.message + '. Please try again.';
+    document.getElementById('errorBox').style.display = 'block';
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function applyAnalysis(data) {
+  // Confidence
+  if (data.evidenceQuality !== undefined || data.confidence !== undefined) {
+    const qual = data.evidenceQuality ?? data.confidence;
+    document.getElementById('confidenceWrap').style.display = 'flex';
+    document.getElementById('confidenceFill').style.width = qual + '%';
+    document.getElementById('confidenceValue').textContent = qual + '%';
+    document.getElementById('confidenceFill').style.background = qual >= 70 ? 'var(--green)' : qual >= 40 ? 'var(--gold)' : 'var(--orange)';
+  }
+
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  // Root
+  for (let i = 0; i < 5; i++) {
+    if (data.root[i]?.met) { await delay(120); rootCBs[i].checked = true; calculate(); }
+  }
+  // Branches
+  for (let i = 0; i < 5; i++) {
+    if (data.branches[i]?.met) { await delay(120); branchCBs[i].checked = true; calculate(); }
+  }
+  // Fruit
+  for (let i = 0; i < 5; i++) {
+    const s = Math.min(3, Math.max(0, data.fruit[i]?.score || 0));
+    for (let v = 1; v <= s; v++) { await delay(60); fruitSls[i].value = v; calculate(); }
+  }
+  // Visibility
+  const vs = Math.min(10, Math.max(0, data.visibility?.score || 0));
+  for (let v = 1; v <= vs; v++) { await delay(40); visSlider.value = v; calculate(); }
+  // Toxic
+  for (let i = 0; i < 3; i++) {
+    if (data.toxic[i]?.present) { await delay(200); toxicCBs[i].checked = true; calculate(); }
+  }
+
+  renderAuditReport(data);
+}
+
+function renderAuditReport(data) {
+  const isCandidate = subjectType === 'candidate';
+  let html = '';
+
+  // Summary
+  if (data.summary) {
+    html += `<div class="audit-section"><div class="audit-section-title" style="color:var(--gold);">Executive Summary</div>
+      <p style="font-size:13px;line-height:1.7;color:var(--text-dim);">${data.summary}</p></div>`;
+  }
+
+  // Background
+  if (data.historicalBackground) {
+    html += `<div class="audit-section"><div class="audit-section-title">Historical Background</div>
+      <p style="font-size:12px;line-height:1.7;color:var(--text-dim);">${data.historicalBackground}</p></div>`;
+  }
+
+  // Supporters/Opponents
+  if ((data.supporters?.length) || (data.opponents?.length)) {
+    html += `<div class="audit-section"><div class="supporters-grid">`;
+    if (data.supporters?.length) {
+      html += `<div class="supporter-panel" style="background:var(--green-dim);border:1px solid rgba(82,212,138,0.2);">
+        <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--green);margin-bottom:8px;">
+          <i class="fa-solid fa-thumbs-up" style="margin-right:4px;"></i>${isCandidate ? 'Supporters' : 'Proponents'}</div>
+        <ul style="list-style:none;font-size:12px;color:var(--text-dim);space-y:4px;">
+          ${data.supporters.map(s => `<li style="padding:2px 0;">· ${s}</li>`).join('')}
+        </ul></div>`;
+    }
+    if (data.opponents?.length) {
+      html += `<div class="supporter-panel" style="background:var(--red-dim);border:1px solid rgba(232,85,85,0.2);">
+        <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--red);margin-bottom:8px;">
+          <i class="fa-solid fa-thumbs-down" style="margin-right:4px;"></i>Opponents</div>
+        <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
+          ${data.opponents.map(o => `<li style="padding:2px 0;">· ${o}</li>`).join('')}
+        </ul></div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  const rootLabels = ['Liberty & Anti-Carceral','Justice & Reparations','Solidarity & Agency','Safety & Housing','Fiscal Integrity'];
+  const branchLabels = isCandidate
+    ? ['Economic Transfer','Institutional Protection','Housing & Homelessness','Criminal Justice Reform','Intergenerational Wealth']
+    : ['Economic Transfer Mechanisms','Institutional Protection','Housing Solutions','Justice Reform Mechanisms','Intergenerational Wealth Structures'];
+  const fruitLabels = ['Economic Transfer','Institutional Protection','Housing Mitigation','Criminal Justice','Intergenerational Wealth'];
+  const toxicLabels = isCandidate ? ['The Gatekeeper','The Plantation','The Betrayal'] : ['The Carve-Out','The Trojan Horse','The Unfunded Mandate'];
+
+  // Root
+  html += renderAuditSection('Root Analysis — Values', 'var(--gold)', data.root, rootLabels, 'boolean');
+  html += renderAuditSection('Branches — Advocacy', 'var(--blue)', data.branches, branchLabels, 'boolean');
+  html += renderAuditSection('Fruit — Outcomes', 'var(--green)', data.fruit, fruitLabels, 'score');
+  // Visibility
+  if (data.visibility) {
+    html += `<div class="audit-section"><div class="audit-section-title" style="color:var(--orange);">Visibility</div>
+      <div class="audit-item">
+        <div class="audit-item-head">
+          <span style="color:var(--orange);font-family:'DM Mono',monospace;font-size:12px;font-weight:600;">${data.visibility.score}/10</span>
+          <span class="audit-item-name">Information Availability</span>
+        </div>
+        <div class="audit-item-reason">${data.visibility.reasoning}</div>
+      </div></div>`;
+  }
+  html += renderAuditSection('Toxic Soil — Penalties', 'var(--red)', data.toxic, toxicLabels, 'toxic');
+
+  // Sources
+  if (data.sources?.length) {
+    const cats = { National:[], Local:[], Independent:[], Unsubstantiated:[] };
+    data.sources.forEach(s => {
+      let cat = (s.category || 'Independent');
+      if (!cats[cat]) cat = 'Independent';
+      cats[cat].push(s);
+    });
+    html += `<div class="audit-section"><div class="audit-section-title" style="color:var(--gold);">Citations & Source Analysis</div>`;
+    for (const [catName, sources] of Object.entries(cats)) {
+      if (!sources.length) continue;
+      html += `<div class="source-category"><div class="source-cat-label">${catName}</div>`;
+      sources.forEach(s => {
+        const bias = +s.biasRating;
+        const biasColor = bias <= 3 ? 'var(--blue)' : bias >= 8 ? 'var(--red)' : 'var(--purple)';
+        html += `<div class="source-item">
+          <i class="fa-solid fa-angle-right" style="color:var(--border);margin-top:3px;font-size:11px;flex-shrink:0;"></i>
+          ${s.url && s.url !== 'N/A'
+            ? `<a href="${s.url}" target="_blank" rel="noopener noreferrer" class="source-link">${s.title}</a>`
+            : `<span class="source-text">${s.title}</span>`}
+          ${s.biasRating ? `<span class="bias-badge" style="color:${biasColor};border-color:${biasColor}30;">Bias ${bias}/10</span>` : ''}
+        </div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  document.getElementById('auditContent').innerHTML = html;
+  document.getElementById('auditBox').style.display = 'block';
+  document.getElementById('auditBox').classList.add('fade-in');
+}
+
+function renderAuditSection(title, color, items, labels, type) {
+  let html = `<div class="audit-section"><div class="audit-section-title" style="color:${color};">${title}</div>`;
+  if (!items) return html + '</div>';
+  items.forEach((item, i) => {
+    let icon, iconColor, badge = '';
+    if (type === 'boolean') {
+      icon = item.met ? 'fa-circle-check' : 'fa-circle-xmark';
+      iconColor = item.met ? color : 'var(--text-dimmer)';
+    } else if (type === 'score') {
+      icon = item.score > 0 ? 'fa-circle-check' : 'fa-circle-xmark';
+      iconColor = item.score === 3 ? 'var(--green)' : item.score > 0 ? 'var(--gold)' : 'var(--text-dimmer)';
+      badge = `<span style="font-family:'DM Mono',monospace;font-size:11px;color:${iconColor};border:1px solid ${iconColor}30;padding:1px 6px;border-radius:4px;">${item.score}/3</span>`;
+    } else if (type === 'toxic') {
+      icon = item.present ? 'fa-triangle-exclamation' : 'fa-circle-check';
+      iconColor = item.present ? 'var(--red)' : 'var(--green)';
+    }
+    html += `<div class="audit-item">
+      <div class="audit-item-head">
+        <i class="fa-solid ${icon}" style="color:${iconColor};font-size:13px;"></i>
+        <span class="audit-item-name" style="color:${type==='boolean' ? (item.met ? 'var(--text)' : 'var(--text-dim)') : 'var(--text)'}">${labels[i]}</span>
+        ${badge}
+      </div>
+      <div class="audit-item-reason">${item.reasoning || '—'}</div>
+    </div>`;
+  });
+  return html + '</div>';
+}
+
+// ══════════════════════════════════════════════
+//  CLOUD AUDIT STORE
+// ══════════════════════════════════════════════
+const CloudAuditStore = {
+  getUserId() {
+    let id = localStorage.getItem('rfUserId');
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem('rfUserId', id); }
+    return id;
+  },
+
+  getBackendUrl() {
+    return (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+  },
+
+  async save(audit) {
+    const res = await fetch(`${this.getBackendUrl()}/api/audits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: this.getUserId(), audit })
+    });
+    if (!res.ok) throw new Error('Cloud save failed: ' + res.status);
+    return res.json();
+  },
+
+  async loadAll() {
+    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}`);
+    if (!res.ok) throw new Error('Cloud load failed: ' + res.status);
+    const data = await res.json();
+    return data.audits || [];
+  },
+
+  async delete(auditId) {
+    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}/${auditId}`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) throw new Error('Cloud delete failed: ' + res.status);
+  },
+
+  async createShareLink(audit) {
+    const res = await fetch(`${this.getBackendUrl()}/api/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audit })
+    });
+    if (!res.ok) throw new Error('Share failed: ' + res.status);
+    const data = await res.json();
+    return `${window.location.origin}/shared/${data.token}`;
+  }
+};
+
+// ══════════════════════════════════════════════
+//  SAVE / LOAD AUDITS
+// ══════════════════════════════════════════════
+function getSavedAudits() {
+  try { return JSON.parse(localStorage.getItem('rfAudits') || '[]'); } catch { return []; }
+}
+function setSavedAudits(audits) {
+  localStorage.setItem('rfAudits', JSON.stringify(audits));
+}
+
+function buildAuditObject() {
+  const name = document.getElementById('nameInput').value.trim() || 'Unnamed Subject';
+  const total = calculate();
+  const { title } = getVerdict(total);
+  return {
+    id: Date.now(),
+    name, subjectType, total, verdict: title,
+    date: new Date().toLocaleDateString(),
+    pathway: currentPathway,
+    scores: { ...scores },
+    fruitVals: Array.from(fruitSls).map(s => +s.value),
+    visVal: +visSlider.value,
+    rootChecked: Array.from(rootCBs).map(c => c.checked),
+    branchChecked: Array.from(branchCBs).map(c => c.checked),
+    toxicChecked: Array.from(toxicCBs).map(c => c.checked),
+
+  };
+}
+
+async function saveAudit() {
+  const audit = buildAuditObject();
+
+  // Cloud-first, localStorage fallback
+  const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
+  if (isCloudAvailable) {
+    try {
+      await CloudAuditStore.save(audit);
+      showToast('Audit saved to cloud ☁️');
+      await syncCloudAuditsToLocal();
+    } catch (err) {
+      console.warn('Cloud save failed, falling back to local:', err);
+      localSave(audit);
+      showToast('Saved locally (cloud unavailable)');
+    }
+  } else {
+    localSave(audit);
+    showToast('Audit saved!');
+  }
+
+  renderSavedList();
+}
+
+function localSave(audit) {
+  const audits = getSavedAudits();
+  audits.unshift(audit);
+  setSavedAudits(audits);
+  document.getElementById('savedCount').textContent = audits.length;
+}
+
+async function syncCloudAuditsToLocal() {
+  try {
+    const cloudAudits = await CloudAuditStore.loadAll();
+    setSavedAudits(cloudAudits);
+    document.getElementById('savedCount').textContent = cloudAudits.length;
+  } catch (err) {
+    console.warn('Cloud sync failed:', err);
+  }
+}
+
+function loadAudit(id) {
+  const audits = getSavedAudits();
+  const audit = audits.find(a => a.id === id);
+  if (!audit) return;
+
+  setType(audit.subjectType);
+  if (audit.pathway) setPathway(audit.pathway);
+  document.getElementById('nameInput').value = audit.name;
+  audit.rootChecked.forEach((v,i) => rootCBs[i].checked = v);
+  audit.branchChecked.forEach((v,i) => branchCBs[i].checked = v);
+  audit.fruitVals.forEach((v,i) => fruitSls[i].value = v);
+  visSlider.value = audit.visVal;
+  audit.toxicChecked.forEach((v,i) => toxicCBs[i].checked = v);
+  calculate();
+  showView('assess');
+  showToast('Audit loaded: ' + audit.name);
+}
+
+async function deleteAudit(id) {
+  const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
+  if (isCloudAvailable) {
+    try {
+      await CloudAuditStore.delete(id);
+      await syncCloudAuditsToLocal();
+    } catch (err) {
+      console.warn('Cloud delete failed, removing locally:', err);
+      setSavedAudits(getSavedAudits().filter(a => a.id !== id));
+    }
+  } else {
+    setSavedAudits(getSavedAudits().filter(a => a.id !== id));
+  }
+  renderSavedList();
+  showToast('Audit deleted');
+}
+
+function clearAllSaved() {
+  if (!confirm('Clear all saved audits?')) return;
+  localStorage.removeItem('rfAudits');
+  renderSavedList();
+  showToast('All audits cleared');
+}
+
+async function renderSavedList() {
+  // Try to sync from cloud first, then render from local cache
+  const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
+  if (isCloudAvailable) {
+    try { await syncCloudAuditsToLocal(); } catch (err) { console.warn('Sync skipped:', err); }
+  }
+
+  const audits = getSavedAudits();
+  document.getElementById('savedCount').textContent = audits.length;
+  const list = document.getElementById('savedList');
+  if (!audits.length) {
+    list.innerHTML = `<div class="empty-state"><i class="fa-solid fa-folder-open"></i><div>No saved audits yet.</div><div style="font-size:12px;margin-top:4px;">Complete an assessment and hit Save.</div></div>`;
+    return;
+  }
+  list.innerHTML = audits.map(a => {
+    const { color } = getVerdictByTitle(a.verdict);
+    return `<div class="audit-list-item" onclick="loadAudit(${a.id})">
+      <div style="flex:1;min-width:0;">
+        <div class="audit-list-name">${a.name}</div>
+        <div class="audit-list-meta">${a.verdict} · ${a.date} · ${a.subjectType}</div>
+      </div>
+      <div class="audit-list-score" style="color:${color};">${a.total}</div>
+      <div class="audit-list-actions" onclick="event.stopPropagation()">
+        <button class="btn-icon" onclick="deleteAudit(${a.id})" title="Delete"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function getVerdictByTitle(title) {
+  const map = {
+    'THE VANGUARD':'var(--green)', 'TRANSFORMATIVE LAW':'var(--green)',
+    'THE WORKER':'#6eddb5', 'PROGRESSIVE REFORM':'#6eddb5',
+    'THE PRAGMATIST':'var(--blue)', 'INCREMENTAL REFORM':'var(--blue)',
+    'THE POLITICIAN':'var(--gold)', 'MAINTENANCE BILL':'var(--gold)',
+    'THE OBSTACLE':'var(--orange)', 'HARMFUL POLICY':'var(--orange)',
+    'THE OPPOSITION':'var(--red)', 'DETRIMENTAL POLICY':'var(--red)'
+  };
+  return { color: map[title] || 'var(--text-dim)' };
+}
+
+// ══════════════════════════════════════════════
+//  COMPARE
+// ══════════════════════════════════════════════
+function populateCompareSelects() {
+  const audits = getSavedAudits();
+  const opts = audits.length
+    ? ['<option value="">— Select —</option>', ...audits.map(a => `<option value="${a.id}">${a.name} (${a.total}/60)</option>`)].join('')
+    : '<option value="">No saved audits</option>';
+  ['compareA','compareB'].forEach(id => document.getElementById(id).innerHTML = opts);
+  document.getElementById('compareEmpty').style.display = audits.length < 2 ? 'block' : 'none';
+}
+
+function runComparison() {
+  const idA = +document.getElementById('compareA').value;
+  const idB = +document.getElementById('compareB').value;
+  if (!idA || !idB || idA === idB) { showToast('Select two different audits'); return; }
+
+  const audits = getSavedAudits();
+  const a = audits.find(x => x.id === idA);
+  const b = audits.find(x => x.id === idB);
+  if (!a || !b) return;
+
+  document.getElementById('compareResult').style.display = 'block';
+  document.getElementById('compareEmpty').style.display = 'none';
+  document.getElementById('compareGrid').innerHTML = [a,b].map(audit => {
+    const { color } = getVerdictByTitle(audit.verdict);
+    const cats = ['Root','Branches','Fruit','Visibility'];
+    const maxes = [25,10,15,10];
+    const vals = [audit.scores.root, audit.scores.branch, audit.scores.fruit, audit.scores.vis];
+    return `<div class="compare-panel">
+      <div class="compare-panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>${audit.name}</span>
+        <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:${color};">${audit.total}</span>
+      </div>
+      <div style="padding:16px;">
+        <div style="font-size:11px;color:${color};font-family:'DM Mono',monospace;margin-bottom:16px;">${audit.verdict}</div>
+        ${cats.map((cat,i) => `
+          <div style="margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+              <span style="color:var(--text-dim);">${cat}</span>
+              <span style="font-family:'DM Mono',monospace;">${vals[i]}/${maxes[i]}</span>
+            </div>
+            <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden;">
+              <div style="height:100%;width:${(vals[i]/maxes[i]*100)}%;background:var(--gold);border-radius:2px;"></div>
+            </div>
+          </div>`).join('')}
+        ${audit.scores.toxic > 0 ? `<div style="font-size:12px;color:var(--red);margin-top:8px;">☠️ −${audit.scores.toxic} penalties</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════
+//  SHARE + PDF + COPY
+// ══════════════════════════════════════════════
+async function shareAudit() {
+  const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
+
+  if (isCloudAvailable) {
+    try {
+      const audit = buildAuditObject();
+      const url = await CloudAuditStore.createShareLink(audit);
+      await navigator.clipboard.writeText(url);
+      showToast('Share link copied ☁️');
+      return;
+    } catch (err) {
+      console.warn('Cloud share failed, falling back to URL encoding:', err);
+    }
+  }
+
+  // Fallback: encode state into URL query param
+  const name = document.getElementById('nameInput').value || 'Unknown';
+  const state = {
+    n: name, t: subjectType,
+    r: Array.from(rootCBs).map(c => c.checked ? 1 : 0).join(''),
+    b: Array.from(branchCBs).map(c => c.checked ? 1 : 0).join(''),
+    f: Array.from(fruitSls).map(s => s.value).join(''),
+    v: visSlider.value,
+    x: Array.from(toxicCBs).map(c => c.checked ? 1 : 0).join('')
+  };
+  const url = window.location.origin + window.location.pathname + '?audit=' + btoa(JSON.stringify(state));
+  navigator.clipboard.writeText(url).then(() => showToast('Share link copied!')).catch(() => prompt('Copy this link:', url));
+}
+
+function loadFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  const audit = params.get('audit');
+  if (!audit) return;
+  try {
+    const s = JSON.parse(atob(audit));
+    if (s.t) setType(s.t);
+    if (s.n) document.getElementById('nameInput').value = s.n;
+    if (s.r) s.r.split('').forEach((v,i) => rootCBs[i].checked = v === '1');
+    if (s.b) s.b.split('').forEach((v,i) => branchCBs[i].checked = v === '1');
+    if (s.f) s.f.split('').forEach((v,i) => fruitSls[i].value = v);
+    if (s.v) visSlider.value = s.v;
+    if (s.x) s.x.split('').forEach((v,i) => toxicCBs[i].checked = v === '1');
+    calculate();
+    showToast('Shared audit loaded!');
+  } catch(e) { console.error('Failed to load URL state', e); }
+}
+
+function copyReport() {
+  const name = document.getElementById('nameInput').value || 'Unknown';
+  const total = calculate();
+  const { title } = getVerdict(total);
+  const lines = [
+    'ROOT & FRUIT INTEGRITY INDEX',
+    '═══════════════════════════════',
+    `Subject: ${name}`,
+    `Type: ${subjectType}`,
+    '',
+    `SCORE: ${total}/60`,
+    `VERDICT: ${title}`,
+    '',
+    'BREAKDOWN:',
+    `  🌱 Root (Values):      ${scores.root}/25`,
+    `  📣 Branches:           ${scores.branch}/10`,
+    `  🍎 Fruit (Outcomes):   ${scores.fruit}/15`,
+    `  ☀️  Visibility:         ${scores.vis}/10`,
+    `  ☠️  Penalties:          −${scores.toxic}`,
+    '',
+    'Graded via Root & Fruit Calculator'
+  ];
+  const text = lines.join('\n');
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select();
+  document.execCommand('copy'); document.body.removeChild(ta);
+  showToast('Report copied to clipboard!');
+}
+
+function exportPDF() {
+  const { jsPDF } = window.jspdf;
+  const name = document.getElementById('nameInput').value || 'Unknown';
+  const total = calculate();
+  const { title } = getVerdict(total);
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const W = 210, margin = 20;
+  let y = margin;
+
+  // Header
+  doc.setFillColor(8,8,8); doc.rect(0,0,W,40,'F');
+  doc.setTextColor(200,169,110); doc.setFontSize(22); doc.setFont('helvetica','bold');
+  doc.text('ROOT & FRUIT', margin, y+8);
+  doc.setTextColor(255,255,255); doc.setFontSize(10);
+  doc.text('INTEGRITY INDEX', margin, y+15);
+  doc.setFontSize(9); doc.setTextColor(136,136,136);
+  doc.text('Generated ' + new Date().toLocaleDateString(), W-margin, y+8, { align:'right' });
+  y = 50;
+
+  doc.setTextColor(30,30,30); doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text(name, margin, y); y += 8;
+  doc.setFontSize(10); doc.setFont('helvetica','normal'); doc.setTextColor(100,100,100);
+  doc.text(subjectType.toUpperCase() + ' · ' + title + ' · ' + total + '/60 pts', margin, y); y += 12;
+
+  const sections = [
+    ['🌱 Root (Values)', scores.root, 25],
+    ['📣 Branches', scores.branch, 10],
+    ['🍎 Fruit (Outcomes)', scores.fruit, 15],
+    ['☀️ Visibility', scores.vis, 10],
+    ['☠️ Penalties', -scores.toxic, 0]
+  ];
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
+  doc.text('SCORE BREAKDOWN', margin, y); y += 6;
+  doc.setDrawColor(200,169,110); doc.line(margin, y, W-margin, y); y += 6;
+
+  sections.forEach(([label, val, max]) => {
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(60,60,60);
+    doc.text(label, margin, y);
+    const scoreText = max ? val + ' / ' + max : (val < 0 ? val : '+'+val);
+    doc.text(scoreText, W-margin, y, { align:'right' });
+    if (max) {
+      doc.setFillColor(230,230,230); doc.roundedRect(margin, y+2, W-margin*2, 3, 1.5, 1.5, 'F');
+      doc.setFillColor(200,169,110); doc.roundedRect(margin, y+2, (W-margin*2)*(val/max), 3, 1.5, 1.5, 'F');
+    }
+    y += 12;
+  });
+
+  y += 4;
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
+  doc.text('FINAL SCORE: ' + total + '/60 — ' + title, margin, y); y += 10;
+
+  if (lastAnalysisData?.summary) {
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(50,50,50);
+    doc.text('EXECUTIVE SUMMARY', margin, y); y += 5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
+    const lines = doc.splitTextToSize(lastAnalysisData.summary, W-margin*2);
+    doc.text(lines, margin, y); y += lines.length * 5 + 6;
+  }
+
+  if (lastAnalysisData?.historicalBackground) {
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(50,50,50);
+    doc.text('HISTORICAL BACKGROUND', margin, y); y += 5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
+    const lines = doc.splitTextToSize(lastAnalysisData.historicalBackground, W-margin*2);
+    if (y + lines.length*5 > 280) { doc.addPage(); y = margin; }
+    doc.text(lines, margin, y); y += lines.length * 5 + 6;
+  }
+
+  doc.setFontSize(8); doc.setTextColor(160,160,160);
+  doc.text('Root & Fruit Integrity Index · rootandfruit.app', W/2, 290, { align:'center' });
+
+  doc.save(`Root-Fruit-${name.replace(/\s+/g,'-')}.pdf`);
+  showToast('PDF exported!');
+}
+
+// ══════════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════════
+function setLoading(on) {
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = on;
+  btn.innerHTML = on
+    ? '<div class="loader"></div> Auditing...'
+    : '<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Analyze';
+}
+
+function resetAll() {
+  rootCBs.forEach(c => c.checked = false);
+  branchCBs.forEach(c => c.checked = false);
+  fruitSls.forEach(s => s.value = 0);
+  visSlider.value = 0;
+  toxicCBs.forEach(c => c.checked = false);
+  document.getElementById('nameInput').value = '';
+  document.getElementById('errorBox').style.display = 'none';
+  for (let i = 0; i < 5; i++) { ['rc','bc'].forEach(p => { const el = document.getElementById(p+i); if(el) el.classList.remove('checked-gold','checked-blue','checked-red'); }); }
+  for (let i = 0; i < 3; i++) { const el = document.getElementById('tx'+i); if(el) el.classList.remove('active'); }
+  calculate();
+}
+
+function resetChecks() {
+  rootCBs.forEach(c => c.checked = false);
+  branchCBs.forEach(c => c.checked = false);
+  fruitSls.forEach(s => s.value = 0);
+  visSlider.value = 0;
+  toxicCBs.forEach(c => c.checked = false);
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ══════════════════════════════════════════════
+//  EVENT LISTENERS
+// ══════════════════════════════════════════════
+rootCBs.forEach((c,i) => c.addEventListener('change', () => { updateRowState('rc', i, c.checked, 'gold'); calculate(); }));
+branchCBs.forEach((c,i) => c.addEventListener('change', () => { updateRowState('bc', i, c.checked, 'blue'); calculate(); }));
+fruitSls.forEach(s => s.addEventListener('input', calculate));
+visSlider.addEventListener('input', calculate);
+toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getElementById('tx'+i).classList.toggle('active', c.checked); calculate(); }));
+
+// ══════════════════════════════════════════════
+//  ONBOARDING
+// ══════════════════════════════════════════════
+let obStep = 0;
+const OB_STEPS = 4;
+
+function showOnboarding() {
+  obStep = 0;
+  updateObStep();
+  document.getElementById('onboardModal').classList.remove('hidden');
+}
+function closeOnboarding() {
+  document.getElementById('onboardModal').classList.add('hidden');
+  localStorage.setItem('rfOnboarded', '1');
+}
+function obNext() { obStep = Math.min(obStep + 1, OB_STEPS - 1); updateObStep(); }
+function obPrev() { obStep = Math.max(obStep - 1, 0); updateObStep(); }
+function updateObStep() {
+  document.querySelectorAll('.onboard-step').forEach((el, i) => el.classList.toggle('active', i === obStep));
+}
+
+// ══════════════════════════════════════════════
+//  PATHWAY MODIFIER
+// ══════════════════════════════════════════════
+let currentPathway = 'elected';
+function setPathway(p) {
+  currentPathway = p;
+  document.getElementById('pw-elected').classList.toggle('active', p === 'elected');
+  document.getElementById('pw-community').classList.toggle('active', p === 'community');
+  const note = document.getElementById('pathwayNote');
+  note.classList.toggle('visible', p === 'community');
+}
+
+// ══════════════════════════════════════════════
+//  SHARE CARD CANVAS
+// ══════════════════════════════════════════════
+function drawShareCard() {
+  const canvas = document.getElementById('shareCardCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = 600, H = 315;
+  canvas.width = W; canvas.height = H;
+
+  const total = calculate();
+  const name = document.getElementById('nameInput').value || 'Unknown Subject';
+  const { title, color } = getVerdict(total);
+
+  // BG
+  ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H);
+
+  // Subtle grid pattern
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 30) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 30) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  // Gold accent bar left
+  ctx.fillStyle = '#c8a96e'; ctx.fillRect(0, 0, 4, H);
+
+  // Score circle
+  const cx = W - 90, cy = H / 2;
+  ctx.beginPath(); ctx.arc(cx, cy, 60, 0, Math.PI * 2);
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+
+  // Score arc
+  const pct = total / 60;
+  ctx.beginPath(); ctx.arc(cx, cy, 60, -Math.PI/2, -Math.PI/2 + pct * Math.PI * 2);
+  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.font = 'bold 38px "Arial"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(total, cx, cy - 8);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '12px "Arial"'; ctx.fillText('/ 60', cx, cy + 18);
+
+  // Left content
+  const lx = 36;
+
+  // Brand
+  ctx.fillStyle = '#c8a96e';
+  ctx.font = 'bold 13px "Arial"'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('ROOT & FRUIT  ·  INTEGRITY INDEX', lx, 28);
+
+  // Name
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 28px "Arial"'; ctx.textBaseline = 'top';
+  const maxNameW = W - 200;
+  let nameFontSize = 28;
+  ctx.font = `bold ${nameFontSize}px Arial`;
+  while (ctx.measureText(name).width > maxNameW && nameFontSize > 14) {
+    nameFontSize--; ctx.font = `bold ${nameFontSize}px Arial`;
+  }
+  ctx.fillText(name, lx, 64);
+
+  // Verdict
+  ctx.fillStyle = color;
+  ctx.font = `bold 18px "Arial"`; ctx.textBaseline = 'top';
+  ctx.fillText(title, lx, 64 + nameFontSize + 10);
+
+  // Score bars
+  const barY = 160;
+  const barW = 280;
+  const cats = [
+    { label: 'Root', val: scores.root, max: 25, color: '#c8a96e' },
+    { label: 'Branches', val: scores.branch, max: 10, color: '#5ba3f5' },
+    { label: 'Fruit', val: scores.fruit, max: 15, color: '#52d48a' },
+    { label: 'Light', val: scores.vis, max: 10, color: '#f0913a' },
+  ];
+  cats.forEach((cat, i) => {
+    const y = barY + i * 34;
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '11px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText(cat.label, lx, y + 7);
+    const bx = lx + 70;
+    ctx.fillStyle = '#2a2a2a'; ctx.beginPath();
+    ctx.roundRect(bx, y, barW, 14, 7); ctx.fill();
+    const filled = (cat.val / cat.max) * barW;
+    if (filled > 0) {
+      ctx.fillStyle = cat.color; ctx.beginPath();
+      ctx.roundRect(bx, y, filled, 14, 7); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '10px Arial'; ctx.textAlign = 'right';
+    ctx.fillText(`${cat.val}/${cat.max}`, bx + barW + 36, y + 7);
+    ctx.textAlign = 'left';
+  });
+
+  // Penalty
+  if (scores.toxic > 0) {
+    ctx.fillStyle = '#e85555';
+    ctx.font = '11px Arial'; ctx.textBaseline = 'middle';
+    ctx.fillText(`☠ −${scores.toxic} penalty`, lx, barY + 4 * 34 + 7);
+  }
+
+  // Footer
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.font = '11px Arial'; ctx.textBaseline = 'bottom';
+  ctx.fillText('rootandfruit.app', lx, H - 14);
+}
+
+function downloadShareCard() {
+  drawShareCard();
+  const canvas = document.getElementById('shareCardCanvas');
+  const name = document.getElementById('nameInput').value || 'audit';
+  const a = document.createElement('a');
+  a.download = `Root-Fruit-${name.replace(/\s+/g,'-')}.png`;
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+  showToast('Image downloaded!');
+}
+
+// ══════════════════════════════════════════════
+//  UPDATED showView — handles methodology + share card
+// ══════════════════════════════════════════════
+function showView(v) {
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+  const viewEl = document.getElementById('view-'+v);
+  if (viewEl) viewEl.classList.add('active');
+  const tabs = ['assess','results','compare','saved','methodology'];
+  const idx = tabs.indexOf(v);
+  if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+  if (v === 'results') { updateResultsView(); setTimeout(drawShareCard, 100); }
+  if (v === 'saved') renderSavedList();
+  if (v === 'compare') populateCompareSelects();
+}
+
+// ══════════════════════════════════════════════
+//  UPDATED INIT — show onboarding for first-timers
+// ══════════════════════════════════════════════
+renderSavedList();
+loadFromURL();
+calculate();
+if (!localStorage.getItem('rfOnboarded')) {
+  setTimeout(showOnboarding, 600);
+}
+</script>
+</body>
+</html>
