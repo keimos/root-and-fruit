@@ -7,7 +7,7 @@ resource "google_cloudbuild_trigger" "main_branch" {
   project     = var.project_id
   name        = "root-and-fruit-deploy"
   description = "Deploy Root & Fruit on push to main"
-  location    = "global"
+  location    = "us-east1"
 
   github {
     owner = var.github_owner
