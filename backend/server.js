@@ -6,10 +6,16 @@
 const express = require('express');
 const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7';
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
 
 // ── Firestore ──────────────────────────────────────────
 const db = new Firestore({ projectId: PROJECT_ID });
@@ -26,42 +32,52 @@ app.use(cors({
 // ── Health check ───────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
-// ── Anthropic proxy ────────────────────────────────────
-// Keeps the API key server-side; never exposed to the browser
+// ── Claude agent: Integrity Index Auditor ─────────────
+// Keeps the API key server-side; never exposed to the browser.
+// Uses adaptive thinking + server-side web_search so the model
+// can verify claims against current sources instead of relying
+// solely on its training cutoff.
 app.post('/api/analyze', async (req, res) => {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'API key not configured' });
+  if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system, max_tokens = 6000 } = req.body;
+  const { messages, system, max_tokens = 16000 } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
 
+  // Wrap the system prompt so we can attach cache_control. Below the
+  // model's minimum-prefix threshold this is a no-op; once the prompt
+  // grows past the threshold, repeated audits start hitting the cache.
+  const systemBlocks = typeof system === 'string'
+    ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+    : system;
+
   try {
-    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens,
-        system,
-        messages
-      })
+    const stream = anthropic.messages.stream({
+      model: MODEL,
+      max_tokens,
+      system: systemBlocks,
+      messages,
+      thinking: { type: 'adaptive' },
+      tools: [
+        { type: 'web_search_20260209', name: 'web_search', max_uses: 5 }
+      ]
     });
 
-    if (!upstream.ok) {
-      const err = await upstream.text();
-      console.error('Anthropic error:', upstream.status, err);
-      return res.status(upstream.status).json({ error: 'Upstream API error', detail: err });
-    }
+    const message = await stream.finalMessage();
 
-    const data = await upstream.json();
-    res.json(data);
+    const usage = message.usage || {};
+    console.log('Audit complete:', {
+      stop_reason: message.stop_reason,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cache_read: usage.cache_read_input_tokens,
+      cache_write: usage.cache_creation_input_tokens
+    });
+
+    res.json(message);
   } catch (err) {
     console.error('Analyze error:', err);
-    res.status(500).json({ error: err.message });
+    const status = err?.status || 500;
+    res.status(status).json({ error: err.message || 'Analyze failed' });
   }
 });
 

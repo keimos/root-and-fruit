@@ -16,7 +16,7 @@ resource "google_cloud_run_v2_service" "backend" {
       max_instance_count = 10
     }
 
-    timeout = "120s"
+    timeout = "600s"
 
     containers {
       # Placeholder image — Cloud Build replaces this on first deploy

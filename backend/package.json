@@ -11,6 +11,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
     "@google-cloud/firestore": "^7.9.0",
     "cors": "^2.8.5",
     "express": "^4.19.2"

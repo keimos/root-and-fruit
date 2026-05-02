@@ -1444,20 +1444,20 @@ async function autoAnalyze() {
   const systemPrompt = buildAuditPrompt(target, isCandidate, isCommunity);
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const response = await fetch(backendUrl + '/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 6000,
-        system: `You are the Integrity Index Auditor. Return ONLY valid JSON — no markdown fences, no prose before or after. Never truncate historicalBackground — it must be 2-3 full substantive paragraphs. For community leaders, civic and organizing records carry equal weight to legislative records when scoring Fruit and Evidence Quality.`,
+        max_tokens: 16000,
+        system: `You are the Integrity Index Auditor. Return ONLY valid JSON — no markdown fences, no prose before or after. Never truncate historicalBackground — it must be 2-3 full substantive paragraphs. For community leaders, civic and organizing records carry equal weight to legislative records when scoring Fruit and Evidence Quality. Use the web_search tool to verify claims, dates, vote counts, and recent activity against current sources before scoring; cite specific sources in the 'sources' array.`,
         messages: [{ role: 'user', content: systemPrompt }]
       })
     });
 
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
-    let text = data.content.map(b => b.text || '').join('');
+    let text = (data.content || []).map(b => b.text || '').join('');
     text = text.replace(/```json/g,'').replace(/```/g,'').trim();
     const parsed = JSON.parse(text);
     lastAnalysisData = parsed;
