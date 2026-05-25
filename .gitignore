@@ -1,6 +1,7 @@
-terraform.tfvars
-.terraform/
-*.tfstate*
+node_modules/
+.env
+.env.*
+!.env.example
 
 firebase-debug.log
 firestore-debug.log
