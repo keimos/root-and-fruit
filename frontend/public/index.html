@@ -9,25 +9,30 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root {
-    --black: #080808;
-    --surface: #111111;
-    --surface2: #1a1a1a;
-    --border: #2a2a2a;
-    --border-light: #333;
-    --gold: #c8a96e;
-    --gold-dim: rgba(200,169,110,0.15);
-    --green: #52d48a;
-    --green-dim: rgba(82,212,138,0.12);
-    --blue: #5ba3f5;
-    --blue-dim: rgba(91,163,245,0.12);
-    --orange: #f0913a;
-    --orange-dim: rgba(240,145,58,0.12);
-    --red: #e85555;
-    --red-dim: rgba(232,85,85,0.12);
-    --purple: #a78bfa;
-    --text: #e8e8e8;
-    --text-dim: #888;
-    --text-dimmer: #555;
+    /* Eggshell / light theme. --black is the page background (kept named
+       --black so the hundreds of var(--black) references flip in one place). */
+    --black: #F5F1E8;
+    --surface: #FFFFFF;
+    --surface2: #EDE9DF;
+    --border: #D4CDB8;
+    --border-light: #C4BC9E;
+    --gold: #8B6914;
+    --gold-dim: rgba(139,105,20,0.1);
+    --green: #2a9d5c;
+    --green-dim: rgba(42,157,92,0.1);
+    --blue: #2563a8;
+    --blue-dim: rgba(37,99,168,0.1);
+    --orange: #c4620a;
+    --orange-dim: rgba(196,98,10,0.1);
+    --red: #c0392b;
+    --red-dim: rgba(192,57,43,0.1);
+    --purple: #6b3fa0;
+    --text: #1a1a18;
+    --text-dim: #5a5248;
+    --text-dimmer: #9a9080;
+    /* Navy accent used by header/nav/footer chrome. */
+    --navy: #0D1B3E;
+    --gold-bright: #E8C96A;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
@@ -47,7 +52,7 @@
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
     pointer-events: none;
     z-index: 9999;
-    opacity: 0.5;
+    opacity: 0.2;
   }
 
   /* ─── TYPOGRAPHY ─── */
@@ -60,9 +65,9 @@
 
   /* ─── HEADER ─── */
   header {
-    background: rgba(8,8,8,0.92);
+    background: rgba(13,27,62,0.97);
     backdrop-filter: blur(20px);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid rgba(139,105,20,0.3);
     position: sticky; top: 0; z-index: 100;
     padding: 0 16px;
   }
@@ -72,18 +77,19 @@
     height: 64px;
   }
   .logo { display: flex; align-items: baseline; gap: 8px; }
-  .logo-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 0.08em; color: var(--text); }
-  .logo-title span { color: var(--gold); }
-  .logo-sub { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.2em; }
+  .logo-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 0.08em; color: #FFFFFF; }
+  .logo-title span { color: var(--gold-bright); }
+  .logo-sub { font-size: 10px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.2em; }
   .header-score-wrap { display: flex; align-items: center; gap: 16px; }
   #liveScore {
     font-family: 'Bebas Neue', sans-serif;
     font-size: 36px;
-    color: var(--text-dim);
+    color: rgba(255,255,255,0.55);
     transition: color 0.4s, transform 0.2s;
     min-width: 50px; text-align: right;
   }
   .header-actions { display: flex; gap: 8px; align-items: center; }
+  /* Default btn-ghost (on light backgrounds) */
   .btn-ghost {
     background: transparent; border: 1px solid var(--border);
     color: var(--text-dim); padding: 6px 12px; border-radius: 6px;
@@ -92,11 +98,14 @@
     transition: all 0.2s;
   }
   .btn-ghost:hover { border-color: var(--gold); color: var(--gold); }
+  /* Header override (on navy) */
+  header .btn-ghost { border: 1px solid rgba(255,255,255,0.2); color: rgba(255,255,255,0.6); }
+  header .btn-ghost:hover { border-color: var(--gold-bright); color: var(--gold-bright); }
 
   /* ─── NAV TABS ─── */
   .nav-tabs {
     display: flex; gap: 2px;
-    background: var(--surface); border: 1px solid var(--border);
+    background: transparent;
     border-radius: 8px; padding: 3px;
     flex-wrap: wrap;
   }
@@ -104,9 +113,9 @@
     padding: 6px 14px; border-radius: 6px; cursor: pointer;
     font-size: 12px; font-weight: 500; text-transform: uppercase;
     letter-spacing: 0.08em; border: none; background: transparent;
-    color: var(--text-dim); transition: all 0.2s; white-space: nowrap;
+    color: rgba(255,255,255,0.5); transition: all 0.2s; white-space: nowrap;
   }
-  .nav-tab.active { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .nav-tab.active { background: rgba(139,105,20,0.25); color: var(--gold-bright); border: 1px solid rgba(139,105,20,0.4); }
 
   /* ─── MAIN CONTENT ─── */
   main { padding: 32px 0 180px; }
@@ -153,7 +162,7 @@
     transition: all 0.2s; white-space: nowrap;
   }
   .toggle-btn.active {
-    background: var(--gold); color: #000; font-weight: 700;
+    background: var(--gold); color: #fff; font-weight: 700;
   }
 
   .input-row { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -288,7 +297,7 @@
   .audit-item-reason { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
 
   /* ─── SCORE CHART (Radar) ─── */
-  canvas#radarChart { width: 100% !important; max-width: 380px; margin: 0 auto; display: block; }
+  canvas#radarChart { width: 100% !important; max-width: 380px; margin: 0 auto; display: block; background: var(--navy); border-radius: 12px; }
 
   /* ─── SCORE BREAKDOWN GRID ─── */
   .score-grid {
@@ -308,8 +317,8 @@
   /* ─── FOOTER ─── */
   .sticky-footer {
     position: fixed; bottom: 0; left: 0; right: 0;
-    background: rgba(8,8,8,0.95); backdrop-filter: blur(20px);
-    border-top: 1px solid var(--border);
+    background: rgba(13,27,62,0.97); backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(139,105,20,0.3);
     padding: 12px 16px 20px; z-index: 99;
   }
   .footer-inner {
@@ -319,17 +328,19 @@
     display: flex; justify-content: space-between; align-items: flex-end;
     margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
   }
-  .verdict-label { font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; }
+  .verdict-label { font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; }
   #verdictTitle {
     font-family: 'Bebas Neue', sans-serif; font-size: 28px;
     letter-spacing: 0.06em; transition: color 0.4s;
+    color: rgba(245,241,232,0.3);
   }
-  .score-label { font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; text-align: right; }
+  .score-label { font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 2px; text-align: right; }
   #finalScore {
     font-family: 'Bebas Neue', sans-serif; font-size: 42px;
     letter-spacing: 0.04em; transition: color 0.4s; line-height: 1;
+    color: rgba(245,241,232,0.3);
   }
-  .score-max { font-size: 14px; color: var(--text-dimmer); }
+  .score-max { font-size: 14px; color: rgba(255,255,255,0.3); }
   .footer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .btn-action {
     flex: 1; padding: 10px 14px; border-radius: 8px; border: none;
@@ -338,10 +349,14 @@
     transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 7px;
     min-width: 100px;
   }
-  .btn-primary { background: var(--gold); color: #000; }
-  .btn-primary:hover { background: #d4b57c; }
+  .btn-primary { background: var(--gold); color: #fff; }
+  .btn-primary:hover { background: #a37e1a; }
+  /* Default (on light cards) */
   .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
   .btn-secondary:hover { border-color: var(--text-dim); }
+  /* Footer override (on navy) */
+  .sticky-footer .btn-secondary { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); border: 1px solid rgba(255,255,255,0.2); }
+  .sticky-footer .btn-secondary:hover { border-color: var(--gold-bright); color: var(--gold-bright); }
 
   /* ─── COMPARISON VIEW ─── */
   .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -439,25 +454,25 @@
     flex-wrap: wrap;
   }
   .btn-analyze {
-    background: linear-gradient(135deg, var(--gold) 0%, #d4b57c 100%);
-    color: #000; border: none;
+    background: linear-gradient(135deg, var(--gold) 0%, #a37e1a 100%);
+    color: #fff; border: none;
     padding: 12px 22px; border-radius: 10px;
     font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.1em;
     cursor: pointer; display: inline-flex; align-items: center; gap: 9px;
-    box-shadow: 0 4px 14px rgba(200,169,110,0.25);
+    box-shadow: 0 4px 14px rgba(139,105,20,0.25);
     transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
     white-space: nowrap;
   }
   .btn-analyze:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(200,169,110,0.4);
+    box-shadow: 0 6px 20px rgba(139,105,20,0.4);
   }
   .btn-analyze:disabled { opacity: 0.7; cursor: progress; }
   .analyze-hint { flex: 1; min-width: 200px; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
   .loader {
     width: 13px; height: 13px; border-radius: 50%;
-    border: 2px solid rgba(0,0,0,0.25); border-top-color: #000;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
     animation: spin 0.7s linear infinite;
     display: inline-block;
   }
@@ -547,7 +562,8 @@
   .onboard-nav { display: flex; gap: 10px; }
   .btn-onboard-skip { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 11px 18px; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; white-space: nowrap; }
   .btn-onboard-skip:hover { border-color: var(--text-dim); color: var(--text); }
-  .btn-onboard-next { flex: 1; background: var(--gold); color: #000; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; }
+  .btn-onboard-next { flex: 1; background: var(--navy); color: #fff; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; }
+  .btn-onboard-next:hover { background: var(--gold); }
   .btn-onboard-next:hover { background: #d4b57c; }
 
   /* ─── PATHWAY MODIFIER ─── */
@@ -561,7 +577,7 @@
 
   /* ─── SHARE CARD ─── */
   .share-card-wrap { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 16px; }
-  .share-card-preview { display: flex; justify-content: center; padding: 20px; background: repeating-conic-gradient(var(--border) 0% 25%, transparent 0% 50%) 0 0/20px 20px; }
+  .share-card-preview { display: flex; justify-content: center; padding: 20px; background: var(--surface2); }
   #shareCardCanvas { border-radius: 8px; max-width: 100%; height: auto; }
   .share-card-actions { padding: 14px 16px; display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -581,6 +597,61 @@
   .verdict-table td { padding: 10px; border-top: 1px solid var(--border); }
   .disclaimer-box { background: var(--gold-dim); border: 1px solid rgba(200,169,110,0.3); border-radius: 10px; padding: 16px 18px; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
   .disclaimer-box strong { color: var(--gold); }
+
+  /* ─── COMMUNITY ASSESSMENT: justification + indicator ─── */
+  .justification-wrap { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .justification-label {
+    font-family: 'DM Mono', monospace; font-size: 10px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-dimmer); margin-bottom: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .justification-label::before { content: ''; display: block; width: 14px; height: 1px; background: var(--border); }
+  .justification-input {
+    width: 100%; padding: 9px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 12px;
+    line-height: 1.6; resize: vertical; min-height: 52px;
+    transition: border-color 0.2s;
+  }
+  .justification-input:focus { outline: none; border-color: var(--gold); }
+  .justification-input::placeholder { color: var(--text-dimmer); font-style: italic; }
+
+  .community-score-indicator {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 22px; margin-top: 20px;
+  }
+  .csi-label {
+    font-family: 'DM Mono', monospace; font-size: 10px;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dimmer);
+    margin-bottom: 14px;
+  }
+  .csi-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .csi-row:last-of-type { border-bottom: none; }
+  .csi-source { color: var(--text-dim); }
+  .csi-score { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 0.04em; line-height: 1; }
+  .csi-bar-wrap {
+    margin-top: 14px; background: var(--surface2);
+    border-radius: 4px; height: 6px; overflow: hidden; position: relative;
+  }
+  .csi-bar-ai       { position: absolute; left: 0; top: 0; height: 100%; border-radius: 4px; background: var(--border); transition: width 0.5s; width: 0%; }
+  .csi-bar-community{ position: absolute; left: 0; top: 0; height: 100%; border-radius: 4px; background: var(--purple); opacity: 0.6; transition: width 0.5s; width: 0%; }
+  .csi-delta { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .csi-delta-pill {
+    font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 600;
+    padding: 2px 9px; border-radius: 12px; letter-spacing: 0.05em;
+  }
+
+  /* ─── STICKY FOOTER: baseline + adjusted pair ─── */
+  .verdict-row { gap: 18px !important; }
+  .verdict-col-divider { width: 1px; background: var(--border); align-self: stretch; }
+  #adjustedVerdictTitle, #adjustedScore { transition: color 0.4s; }
+  #finalScore .score-max, #adjustedScore .score-max { color: var(--text-dimmer); }
 </style>
 </head>
 <body>
@@ -667,7 +738,7 @@
         </div>
         <div class="onboard-nav">
           <button class="btn-onboard-skip" onclick="obPrev()">← Back</button>
-          <button class="btn-onboard-next" onclick="closeOnboarding()" style="background:var(--green);color:#000;">Start Assessing →</button>
+          <button class="btn-onboard-next" onclick="closeOnboarding()" style="background:var(--green);color:#fff;">Start Assessing →</button>
         </div>
       </div>
 
@@ -696,10 +767,11 @@
 </header>
 
 <!-- NAV -->
-<div style="border-bottom:1px solid var(--border); background:var(--surface); position:sticky; top:64px; z-index:99;">
-  <div class="container" style="padding-top:10px; padding-bottom:10px;">
-    <div class="nav-tabs" id="navTabs">
+<div style="border-bottom:1px solid rgba(139,105,20,0.3); background:var(--navy); position:sticky; top:64px; z-index:99; overflow-x:auto;">
+  <div class="container" style="padding-top:8px; padding-bottom:8px;">
+    <div class="nav-tabs" id="navTabs" style="flex-wrap:nowrap;">
       <button class="nav-tab active" onclick="showView('assess')">Assess</button>
+      <button class="nav-tab" onclick="showView('community')">Community Assessment</button>
       <button class="nav-tab" onclick="showView('results')">Results</button>
       <button class="nav-tab" onclick="showView('compare')">Compare</button>
       <button class="nav-tab" onclick="showView('saved')">Saved Audits</button>
@@ -796,6 +868,33 @@
         <div class="audit-box-body" id="auditContent"></div>
       </div>
 
+      <!-- Pointer to Community Assessment tab -->
+      <div class="card" style="background:rgba(167,139,250,0.06);border-color:rgba(167,139,250,0.25);">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <i class="fa-solid fa-people-arrows" style="font-size:22px;color:var(--purple);opacity:0.85;"></i>
+          <div style="flex:1;min-width:240px;">
+            <div style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:0.05em;color:var(--text);">Community Assessment</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.5;margin-top:2px;">Adjust the per-criterion scores by hand — with optional community justifications for each section. Tracks baseline vs adjusted automatically.</div>
+          </div>
+          <button class="btn-analyze" style="background:var(--purple);" onclick="showView('community')">
+            <i class="fa-solid fa-arrow-right"></i> Open
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: COMMUNITY ASSESSMENT ══════════ -->
+  <div id="view-community" class="view">
+    <div class="container" style="padding-top:24px;">
+
+      <!-- Intro -->
+      <div class="card" style="background:rgba(167,139,250,0.05);border-color:rgba(167,139,250,0.25);">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:0.05em;color:var(--gold);">Community Assessment</div>
+        <p style="font-size:13px;color:var(--text-dim);line-height:1.75;margin-top:8px;">After an Auto-Analyze, every criterion is pre-filled from documented evidence. Adjust any score below to reflect your community's direct knowledge, lived experience, or local context the AI may not have access to. Each section has an optional justification field. Your changes update the score in real time and are visible on the Results tab.</p>
+      </div>
+
       <!-- PART 1: ROOT -->
       <div class="card">
         <div class="card-header">
@@ -827,6 +926,10 @@
             <div><div class="check-label-title">Fiscal Integrity</div><div class="check-label-desc">Demonstrated commitment to choosing community needs over donor demands (The Check Receipt principle).</div></div>
           </label>
         </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justRoot" placeholder="Local knowledge, direct experience, or context not in the public record..." oninput="onJustificationChange()"></textarea>
+        </div>
       </div>
 
       <!-- PART 2: BRANCHES -->
@@ -835,7 +938,7 @@
           <div class="card-icon" style="background:var(--blue-dim); color:var(--blue);"><i class="fa-solid fa-bullhorn"></i></div>
           <div>
             <div class="card-title" id="branchTitle">Part 2: The Branches</div>
-            <div class="card-desc" id="branchDesc">Advocacy & Support — 2 pts each · Max 10 pts</div>
+            <div class="card-desc" id="branchDesc">Advocacy & Support — 2 pts each · Max 12 pts</div>
           </div>
         </div>
         <div id="branchChecks">
@@ -859,6 +962,14 @@
             <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
             <div><div class="check-label-title" id="bt4">Intergenerational Wealth Advocacy</div><div class="check-label-desc" id="bd4">Advocated for the creation of long-term assets and endowments.</div></div>
           </label>
+          <label class="check-row" id="bc5">
+            <input type="checkbox" class="custom-cb blue-cb branch-cb" value="2">
+            <div><div class="check-label-title" id="bt5">Education Reform (Black Communities)</div><div class="check-label-desc" id="bd5">Advocated for improvement of public schools serving Black communities: funding equity, curriculum reform, and anti-segregation. <span style="color:var(--orange);font-weight:600;">Note:</span> Voucher/charter advocacy that diverts resources from public schools is a nuance flag, not a TRUE.</div></div>
+          </label>
+        </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justBranch" placeholder="Local advocacy efforts or organizing history not captured in public records..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
 
@@ -918,6 +1029,10 @@
             <div class="slider-ticks"><span>No</span><span>Unlikely</span><span>Likely</span><span>Yes</span></div>
           </div>
         </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justFruit" placeholder="Community-witnessed outcomes or local impact not in public records..." oninput="onJustificationChange()"></textarea>
+        </div>
       </div>
 
       <!-- PART 4: VISIBILITY -->
@@ -925,8 +1040,8 @@
         <div class="card-header">
           <div class="card-icon" style="background:var(--orange-dim); color:var(--orange);"><i class="fa-solid fa-sun"></i></div>
           <div>
-            <div class="card-title">Part 4: The Light</div>
-            <div class="card-desc">Public Visibility & Transparency — 0–10 pts</div>
+            <div class="card-title">Part 4: The Light <span style="font-size:11px;color:var(--text-dimmer);font-family:'DM Mono',monospace;font-weight:normal;letter-spacing:0.1em;text-transform:uppercase;">— separate indicator</span></div>
+            <div class="card-desc">Public Visibility & Transparency — 0–10 pts. Not included in composite.</div>
           </div>
         </div>
         <div class="slider-card">
@@ -937,6 +1052,10 @@
           <div class="slider-subdesc">How well-documented is this subject's record? Includes voting history, legislative activity, organizing history, civic leadership, public statements, journalism, and community engagement — all count equally.</div>
           <input type="range" min="0" max="10" value="0" step="1" class="orange-range" id="visSlider">
           <div class="slider-ticks"><span>Obscure (0)</span><span>Moderate (5)</span><span>Highly Visible (10)</span></div>
+        </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justVis" placeholder="Strong local presence not captured in mainstream coverage..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
 
@@ -984,6 +1103,52 @@
             </div>
           </label>
         </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justToxic" placeholder="Documented evidence or community testimony supporting any Toxic Soil determination..." oninput="onJustificationChange()"></textarea>
+        </div>
+      </div>
+
+      <!-- PEOPLE'S CHOICE -->
+      <div class="card" id="peoplesChoiceCard">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:240px;">
+            <div class="card-title">⭐ The People's Choice <span id="pcPtsLabel" style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--purple);opacity:0.3;margin-left:6px;">+5</span></div>
+            <div class="card-desc" style="margin-top:6px;line-height:1.5;">Award this bonus when a candidate has genuine community favor — trusted and known on the ground — even if they aren't leading in the polls.</div>
+          </div>
+          <label style="display:inline-flex;align-items:center;gap:10px;cursor:pointer;">
+            <input type="checkbox" id="peoplesChoiceCB" onchange="togglePeoplesChoice()" style="width:20px;height:20px;cursor:pointer;">
+            <span style="font-size:12px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);">Award</span>
+          </label>
+        </div>
+        <div class="justification-wrap">
+          <div class="justification-label">Community Justification (optional)</div>
+          <textarea class="justification-input" id="justPeoples" placeholder="Community relationship, trust, and direct engagement supporting this designation..." oninput="onJustificationChange()"></textarea>
+        </div>
+      </div>
+
+      <!-- COMMUNITY SCORE INDICATOR -->
+      <div class="community-score-indicator" id="communityScoreIndicator">
+        <div class="csi-label">Root &amp; Fruit Baseline vs Adjusted Score</div>
+        <div class="csi-row">
+          <span class="csi-source"><i class="fa-solid fa-wand-magic-sparkles" style="margin-right:6px;color:var(--gold);opacity:0.7;"></i>Root &amp; Fruit Baseline</span>
+          <span class="csi-score" id="csiAiScore" style="color:var(--text-dim);">Run an analysis first</span>
+        </div>
+        <div class="csi-row">
+          <span class="csi-source"><i class="fa-solid fa-people-arrows" style="margin-right:6px;color:var(--purple);opacity:0.7;"></i>Adjusted Score</span>
+          <span class="csi-score" id="csiCommunityScore" style="color:var(--text);">—</span>
+        </div>
+        <div class="csi-bar-wrap" style="margin-top:10px;position:relative;">
+          <div class="csi-bar-ai" id="csiBarAi"></div>
+          <div class="csi-bar-community" id="csiBarCommunity"></div>
+        </div>
+        <div class="csi-delta" id="csiDelta" style="display:none;margin-top:10px;">
+          <span class="csi-delta-pill" id="csiDeltaPill"></span>
+          <span id="csiDeltaText" style="color:var(--text-dimmer);font-size:11px;"></span>
+        </div>
+        <div style="font-size:11px;color:var(--text-dimmer);margin-top:10px;line-height:1.6;">
+          Adjustments here are reflected in the sticky footer's Adjusted score and saved with the audit when you click Save.
+        </div>
       </div>
 
     </div>
@@ -1021,7 +1186,7 @@
           <div class="score-cell">
             <div class="score-cell-label">📣 Branches</div>
             <div class="score-cell-value" id="sc-branch" style="color:var(--blue);">0</div>
-            <div class="score-cell-max">/ 10</div>
+            <div class="score-cell-max">/ 12</div>
             <div class="score-cell-bar"><div class="score-cell-fill" id="sb-branch" style="width:0%;background:var(--blue);"></div></div>
           </div>
           <div class="score-cell">
@@ -1031,7 +1196,7 @@
             <div class="score-cell-bar"><div class="score-cell-fill" id="sb-fruit" style="width:0%;background:var(--green);"></div></div>
           </div>
           <div class="score-cell">
-            <div class="score-cell-label">☀️ Visibility</div>
+            <div class="score-cell-label">☀️ Visibility <span style="font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.1em;">separate</span></div>
             <div class="score-cell-value" id="sc-vis" style="color:var(--orange);">0</div>
             <div class="score-cell-max">/ 10</div>
             <div class="score-cell-bar"><div class="score-cell-fill" id="sb-vis" style="width:0%;background:var(--orange);"></div></div>
@@ -1055,7 +1220,32 @@
         <div class="section-label" style="margin-bottom:12px;">Shareable Result Card</div>
         <div class="share-card-wrap">
           <div class="share-card-preview">
-            <canvas id="shareCardCanvas" width="600" height="315"></canvas>
+            <canvas id="shareCardCanvas" width="600" height="330"></canvas>
+          </div>
+          <!-- Subject metadata strip -->
+          <div id="shareCardMeta" style="display:none;border-top:1px solid var(--border);padding:14px 16px;background:var(--surface);">
+            <div style="display:flex;gap:24px;flex-wrap:wrap;">
+              <div>
+                <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--text-dimmer);margin-bottom:3px;">Subject</div>
+                <div id="scmName" style="font-weight:600;font-size:13px;color:var(--text);">—</div>
+              </div>
+              <div>
+                <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--text-dimmer);margin-bottom:3px;">Pathway</div>
+                <div id="scmPathway" style="font-weight:600;font-size:13px;color:var(--text);">—</div>
+              </div>
+              <div>
+                <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--text-dimmer);margin-bottom:3px;">Jurisdiction</div>
+                <div id="scmJurisdiction" style="font-weight:600;font-size:13px;color:var(--text);">—</div>
+              </div>
+              <div id="scmOfficeWrap">
+                <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--text-dimmer);margin-bottom:3px;">Office / Bill</div>
+                <div id="scmOffice" style="font-weight:600;font-size:13px;color:var(--text);">—</div>
+              </div>
+              <div>
+                <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--text-dimmer);margin-bottom:3px;">Analyzed</div>
+                <div id="scmDate" style="font-weight:600;font-size:13px;color:var(--text);">—</div>
+              </div>
+            </div>
           </div>
           <div class="share-card-actions">
             <button class="btn-action btn-primary" style="flex:1;" onclick="downloadShareCard()"><i class="fa-solid fa-image"></i> Download Image</button>
@@ -1132,7 +1322,7 @@
           </div>
           <div class="method-pillar-row">
             <div class="method-pillar-icon">📣</div>
-            <div><div class="method-pillar-title" style="color:var(--blue);">The Branches — Advocacy (10 pts)</div>
+            <div><div class="method-pillar-title" style="color:var(--blue);">The Branches — Advocacy (12 pts)</div>
             <div class="method-pillar-desc">Grants credit for active advocacy and organizing even when institutional power wasn't available. A candidate who fought for wealth transfer, CBO funding, housing, criminal justice reform, and intergenerational assets — but couldn't get it passed — still earns these points.</div></div>
           </div>
           <div class="method-pillar-row">
@@ -1142,8 +1332,8 @@
           </div>
           <div class="method-pillar-row">
             <div class="method-pillar-icon">☀️</div>
-            <div><div class="method-pillar-title" style="color:var(--orange);">The Light — Visibility (10 pts)</div>
-            <div class="method-pillar-desc">Reflects how well-documented the subject's record is — across all evidence types: voting history, organizing records, journalism, public statements, and civic leadership. A community organizer with a rich documented record scores equally to an elected official. Low scores only reflect genuinely sparse evidence.</div></div>
+            <div><div class="method-pillar-title" style="color:var(--orange);">The Light — Visibility (0–10, separate indicator)</div>
+            <div class="method-pillar-desc">Reflects how well-documented the subject's record is — across all evidence types: voting history, organizing records, journalism, public statements, and civic leadership. <strong>The Light is a transparency indicator and does NOT factor into the composite score.</strong> A sparse Light score is a reason to dig deeper, not a verdict in itself.</div></div>
           </div>
           <div class="method-pillar-row">
             <div class="method-pillar-icon">☠️</div>
@@ -1157,12 +1347,12 @@
           <table class="verdict-table">
             <thead><tr><th>Score</th><th>Candidate Verdict</th><th>Policy Verdict</th></tr></thead>
             <tbody>
-              <tr><td><span style="color:var(--green);font-weight:700;">52–60</span></td><td style="color:var(--green);">The Vanguard</td><td style="color:var(--green);">Transformative Law</td></tr>
-              <tr><td><span style="color:#6eddb5;font-weight:700;">42–51</span></td><td style="color:#6eddb5;">The Worker</td><td style="color:#6eddb5;">Progressive Reform</td></tr>
-              <tr><td><span style="color:var(--blue);font-weight:700;">32–41</span></td><td style="color:var(--blue);">The Pragmatist</td><td style="color:var(--blue);">Incremental Reform</td></tr>
-              <tr><td><span style="color:var(--gold);font-weight:700;">20–31</span></td><td style="color:var(--gold);">The Politician</td><td style="color:var(--gold);">Maintenance Bill</td></tr>
-              <tr><td><span style="color:var(--orange);font-weight:700;">10–19</span></td><td style="color:var(--orange);">The Obstacle</td><td style="color:var(--orange);">Harmful Policy</td></tr>
-              <tr><td><span style="color:var(--red);font-weight:700;">0–9</span></td><td style="color:var(--red);">The Opposition</td><td style="color:var(--red);">Detrimental Policy</td></tr>
+              <tr><td><span style="color:var(--green);font-weight:700;">44–57</span></td><td style="color:var(--green);">The Vanguard</td><td style="color:var(--green);">Transformative Law</td></tr>
+              <tr><td><span style="color:#6eddb5;font-weight:700;">35–43</span></td><td style="color:#6eddb5;">The Worker</td><td style="color:#6eddb5;">Progressive Reform</td></tr>
+              <tr><td><span style="color:var(--blue);font-weight:700;">26–34</span></td><td style="color:var(--blue);">The Pragmatist</td><td style="color:var(--blue);">Incremental Reform</td></tr>
+              <tr><td><span style="color:var(--gold);font-weight:700;">16–25</span></td><td style="color:var(--gold);">The Politician</td><td style="color:var(--gold);">Maintenance Bill</td></tr>
+              <tr><td><span style="color:var(--orange);font-weight:700;">7–15</span></td><td style="color:var(--orange);">The Bystander</td><td style="color:var(--orange);">Low Alignment Policy</td></tr>
+              <tr><td><span style="color:var(--red);font-weight:700;">0–6</span></td><td style="color:var(--red);">The Misaligned</td><td style="color:var(--red);">Misaligned Policy</td></tr>
             </tbody>
           </table>
         </div>
@@ -1191,14 +1381,24 @@
 <!-- STICKY FOOTER -->
 <div class="sticky-footer">
   <div class="footer-inner">
-    <div class="verdict-row">
+    <div class="verdict-row" style="display:flex;align-items:flex-end;flex-wrap:wrap;">
+      <!-- Baseline pair -->
       <div>
-        <div class="verdict-label">Final Verdict</div>
+        <div class="verdict-label">Baseline Verdict</div>
         <div id="verdictTitle">UNGRADED</div>
       </div>
+      <div style="text-align:right;padding-right:14px;border-right:1px solid var(--border);">
+        <div class="score-label">Baseline</div>
+        <div id="finalScore">0<span class="score-max">/57</span></div>
+      </div>
+      <!-- Adjusted pair -->
+      <div style="padding-left:6px;">
+        <div class="verdict-label" style="color:rgba(167,139,250,0.7);">Adjusted Verdict</div>
+        <div id="adjustedVerdictTitle" style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:0.06em;color:var(--text-dimmer);">UNGRADED</div>
+      </div>
       <div style="text-align:right;">
-        <div class="score-label">Total Score</div>
-        <div id="finalScore">0<span class="score-max">/60</span></div>
+        <div class="score-label" style="color:rgba(167,139,250,0.7);">Adjusted</div>
+        <div id="adjustedScore" style="font-family:'Bebas Neue',sans-serif;font-size:42px;letter-spacing:0.04em;line-height:1;color:var(--text-dimmer);">0<span class="score-max">/57</span></div>
       </div>
     </div>
     <div class="score-progress" aria-hidden="true">
@@ -1222,9 +1422,14 @@
 // ══════════════════════════════════════════════
 let subjectType = 'candidate';
 let radarChart = null;
+let lastAnalysisData = null;
+// Locked in once Auto-Analyze finishes — represents the AI's read of the record.
+// Any subsequent edits to checkboxes/sliders/People's Choice become the
+// "Adjusted" community score, while this stays frozen.
+let baselineScores = null;
 
 const scores = { root:0, branch:0, fruit:0, vis:0, toxic:0 };
-const MAX = { root:25, branch:10, fruit:15, vis:10 };
+const MAX = { root:25, branch:12, fruit:15, vis:10 };
 
 // ──────────── DOM refs ────────────
 const rootCBs = document.querySelectorAll('.root-cb');
@@ -1246,18 +1451,18 @@ function setType(t) {
 
   if (t === 'candidate') {
     document.getElementById('branchTitle').textContent = 'Part 2: The Branches';
-    document.getElementById('branchDesc').textContent = 'Advocacy & Support — 2 pts each · Max 10 pts';
-    setBranchLabels(['Economic Transfer Advocacy','Institutional Protection Advocacy','Housing & Homelessness Advocacy','Criminal Justice Reform Advocacy','Intergenerational Wealth Advocacy'],
-      ['Actively campaigned or organized for direct wealth transfers to the community.','Lobbied for or supported permanent power structures or CBO funding.','Fought for tenant protections or systemic homelessness solutions.','Supported or co-sponsored bills reducing carceral harms.','Advocated for the creation of long-term assets and endowments.']);
+    document.getElementById('branchDesc').textContent = 'Advocacy & Support — 2 pts each · Max 12 pts';
+    setBranchLabels(['Economic Transfer Advocacy','Institutional Protection Advocacy','Housing & Homelessness Advocacy','Criminal Justice Reform Advocacy','Intergenerational Wealth Advocacy','Education Reform (Black Communities)'],
+      ['Actively campaigned or organized for direct wealth transfers to the community.','Lobbied for or supported permanent power structures or CBO funding.','Fought for tenant protections or systemic homelessness solutions.','Supported or co-sponsored bills reducing carceral harms.','Advocated for the creation of long-term assets and endowments.','Advocated for improvement of public schools serving Black communities: funding equity, curriculum reform, and anti-segregation. Voucher/charter advocacy that diverts from public schools does not qualify.']);
     document.getElementById('toxicNote').textContent = 'An official operating from a minority legislative position may have a bill fail due to power dynamics, not betrayal. Score accordingly.';
     document.getElementById('tt0').textContent = 'The Gatekeeper'; document.getElementById('td0').textContent = 'Blocking other Black leaders to protect their position.';
     document.getElementById('tt1').textContent = 'The Plantation'; document.getElementById('td1').textContent = 'Taking money from harmful industries (private prisons, predatory lenders, etc.).';
     document.getElementById('tt2').textContent = 'The Betrayal'; document.getElementById('td2').textContent = 'Vetoing or actively killing a bill they publicly promised to support.';
   } else {
     document.getElementById('branchTitle').textContent = 'Part 2: The Branches (Scope)';
-    document.getElementById('branchDesc').textContent = 'Legislative Mechanisms — 2 pts each · Max 10 pts';
-    setBranchLabels(['Economic Transfer Mechanisms','Institutional Protection Mechanisms','Housing & Homelessness Solutions','Criminal Justice Reform Mechanisms','Intergenerational Wealth Structures'],
-      ['Includes explicit provisions or pathways for direct wealth transfers to the community.','Codifies permanent power structures, oversight boards, or direct CBO funding.','Establishes tenant protections, funding, or systemic homelessness solutions.','Includes language reducing carceral harms, mandatory minimums, or increasing accountability.','Creates long-term assets (endowments, land trusts) that survive political cycles.']);
+    document.getElementById('branchDesc').textContent = 'Legislative Mechanisms — 2 pts each · Max 12 pts';
+    setBranchLabels(['Economic Transfer Mechanisms','Institutional Protection Mechanisms','Housing & Homelessness Solutions','Criminal Justice Reform Mechanisms','Intergenerational Wealth Structures','Education Reform Provisions'],
+      ['Includes explicit provisions or pathways for direct wealth transfers to the community.','Codifies permanent power structures, oversight boards, or direct CBO funding.','Establishes tenant protections, funding, or systemic homelessness solutions.','Includes language reducing carceral harms, mandatory minimums, or increasing accountability.','Creates long-term assets (endowments, land trusts) that survive political cycles.','Includes provisions for improving public schools in Black communities: funding equity, curriculum reform, and desegregation. Voucher/charter provisions that divert public school funding do not qualify.']);
     document.getElementById('toxicNote').textContent = 'Look for structural flaws, corporate carve-outs, and enforcement gaps that undermine the stated intent of the legislation.';
     document.getElementById('tt0').textContent = 'The Carve-Out'; document.getElementById('td0').textContent = 'Exempts bad actors or preserves harmful corporate loopholes.';
     document.getElementById('tt1').textContent = 'The Trojan Horse'; document.getElementById('td1').textContent = 'Includes hidden punitive measures or preempts local progressive laws.';
@@ -1265,19 +1470,134 @@ function setType(t) {
   }
 }
 function setBranchLabels(titles, descs) {
-  titles.forEach((t,i) => { document.getElementById('bt'+i).textContent = t; document.getElementById('bd'+i).textContent = descs[i]; });
+  titles.forEach((t,i) => {
+    const ttl = document.getElementById('bt'+i);
+    const dsc = document.getElementById('bd'+i);
+    if (ttl) ttl.textContent = t;
+    if (dsc) dsc.textContent = descs[i];
+  });
+}
+
+// ══════════════════════════════════════════════
+//  COMMUNITY ASSESSMENT — justifications + indicator
+// ══════════════════════════════════════════════
+function getJustifications() {
+  const id = x => document.getElementById(x)?.value?.trim() || '';
+  return {
+    root: id('justRoot'),
+    branch: id('justBranch'),
+    fruit: id('justFruit'),
+    vis: id('justVis'),
+    toxic: id('justToxic'),
+    peoples: id('justPeoples')
+  };
+}
+
+function getCommunityDelta() {
+  if (!baselineScores) return null;
+  const pcAwarded = !!document.getElementById('peoplesChoiceCB')?.checked;
+  const baselineTotal  = baselineScores.root + baselineScores.branch + baselineScores.fruit - baselineScores.toxic + (baselineScores.peoplesChoice ? 5 : 0);
+  const communityTotal = Math.max(0, scores.root + scores.branch + scores.fruit - scores.toxic + (pcAwarded ? 5 : 0));
+  return { baselineTotal, communityTotal, delta: communityTotal - baselineTotal };
+}
+
+function updateCommunityScoreIndicator() {
+  const aiEl  = document.getElementById('csiAiScore');
+  const comEl = document.getElementById('csiCommunityScore');
+  const barAi = document.getElementById('csiBarAi');
+  const barC  = document.getElementById('csiBarCommunity');
+  const wrap  = document.getElementById('csiDelta');
+  const pill  = document.getElementById('csiDeltaPill');
+  const dtext = document.getElementById('csiDeltaText');
+  if (!aiEl) return;
+
+  if (!baselineScores) {
+    aiEl.textContent = 'Run an analysis first';
+    aiEl.style.color = 'var(--text-dim)';
+    if (comEl) comEl.textContent = '—';
+    if (barAi) barAi.style.width = '0%';
+    if (barC)  barC.style.width = '0%';
+    if (wrap)  wrap.style.display = 'none';
+    return;
+  }
+
+  const d = getCommunityDelta();
+  const { baselineTotal, communityTotal, delta } = d;
+  const diffColor = delta === 0 ? 'var(--text)' : delta > 0 ? 'var(--green)' : 'var(--red)';
+
+  aiEl.textContent  = baselineTotal + ' / 57';
+  aiEl.style.color  = 'var(--text-dim)';
+  if (comEl) { comEl.textContent = communityTotal + ' / 57'; comEl.style.color = diffColor; }
+  if (barAi) barAi.style.width = Math.min(100, (baselineTotal / 57) * 100) + '%';
+  if (barC)  { barC.style.width = Math.min(100, (communityTotal / 57) * 100) + '%';
+               barC.style.background = delta === 0 ? 'var(--gold)' : delta > 0 ? 'var(--green)' : 'var(--red)'; }
+
+  if (wrap) {
+    if (delta === 0) { wrap.style.display = 'none'; }
+    else {
+      wrap.style.display = 'flex';
+      const sign = delta > 0 ? '+' : '';
+      pill.textContent = sign + delta + ' pts';
+      pill.style.background = delta > 0 ? 'rgba(82,212,138,0.12)' : 'rgba(232,85,85,0.12)';
+      pill.style.color = delta > 0 ? 'var(--green)' : 'var(--red)';
+      pill.style.border = `1px solid ${delta > 0 ? 'rgba(82,212,138,0.3)' : 'rgba(232,85,85,0.3)'}`;
+      dtext.textContent = `Community assessment ${delta > 0 ? 'raised' : 'lowered'} the score by ${Math.abs(delta)} pts from the Root & Fruit baseline`;
+    }
+  }
+}
+
+function onJustificationChange() {
+  // Justifications don't change scores but we still want them captured on save.
+  // No-op for now beyond letting the textarea hold the value; saveAudit picks it up.
+}
+
+function captureBaseline() {
+  baselineScores = {
+    root: scores.root,
+    branch: scores.branch,
+    fruit: scores.fruit,
+    vis: scores.vis,
+    toxic: scores.toxic,
+    rootVals: Array.from(rootCBs).map(c => c.checked),
+    branchVals: Array.from(branchCBs).map(c => c.checked),
+    fruitVals: Array.from(fruitSls).map(s => +s.value),
+    toxicVals: Array.from(toxicCBs).map(c => c.checked),
+    peoplesChoice: !!document.getElementById('peoplesChoiceCB')?.checked
+  };
+  // Freeze Baseline footer pair at this snapshot.
+  const baselineTotal = scores.root + scores.branch + scores.fruit - scores.toxic + (baselineScores.peoplesChoice ? 5 : 0);
+  const { title, color } = getVerdict(baselineTotal);
+  document.getElementById('finalScore').innerHTML = `${baselineTotal}<span class="score-max">/57</span>`;
+  document.getElementById('finalScore').style.color = color;
+  document.getElementById('verdictTitle').textContent = title;
+  document.getElementById('verdictTitle').style.color = color;
+}
+
+// ══════════════════════════════════════════════
+//  PEOPLE'S CHOICE
+// ══════════════════════════════════════════════
+function togglePeoplesChoice() {
+  const cb = document.getElementById('peoplesChoiceCB');
+  const pts = document.getElementById('pcPtsLabel');
+  if (pts) pts.style.opacity = cb?.checked ? '1' : '0.3';
+  calculate();
+  showToast(cb?.checked ? "People's Choice awarded! +5 pts" : "People's Choice removed");
 }
 
 // ══════════════════════════════════════════════
 //  VIEW SWITCHING
 // ══════════════════════════════════════════════
+// NOTE: This earlier showView is dead code (overridden by the canonical one
+// at the bottom of the script). Kept aligned so a stray call doesn't activate
+// the wrong tab. The canonical definition handles the 'community' view.
 function showView(v) {
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
-  document.getElementById('view-'+v).classList.add('active');
-  const tabs = ['assess','results','compare','saved'];
+  const el = document.getElementById('view-'+v); if (el) el.classList.add('active');
+  const tabs = ['assess','community','results','compare','saved','methodology'];
   const idx = tabs.indexOf(v);
   if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+  if (v === 'community') updateCommunityScoreIndicator();
   if (v === 'results') updateResultsView();
   if (v === 'saved') renderSavedList();
   if (v === 'compare') populateCompareSelects();
@@ -1303,13 +1623,28 @@ function calculate() {
     else { document.getElementById('tx'+i).classList.remove('active'); }
   });
 
-  const total = Math.max(0, scores.root + scores.branch + scores.fruit + scores.vis - scores.toxic);
+  // Visibility ("The Light") is shown as a separate transparency indicator —
+  // it does NOT factor into the composite score. People's Choice adds +5.
+  const pcBonus = document.getElementById('peoplesChoiceCB')?.checked ? 5 : 0;
+  const total = Math.max(0, scores.root + scores.branch + scores.fruit - scores.toxic + pcBonus);
   const { title, color } = getVerdict(total);
 
-  document.getElementById('finalScore').innerHTML = `${total}<span class="score-max">/60</span>`;
-  document.getElementById('finalScore').style.color = color;
-  document.getElementById('verdictTitle').textContent = title;
-  document.getElementById('verdictTitle').style.color = color;
+  // Adjusted pair always reflects the current state.
+  const adjEl  = document.getElementById('adjustedScore');
+  const adjVEl = document.getElementById('adjustedVerdictTitle');
+  if (adjEl)  { adjEl.innerHTML = `${total}<span class="score-max">/57</span>`; adjEl.style.color = color; }
+  if (adjVEl) { adjVEl.textContent = title; adjVEl.style.color = color; }
+
+  // Baseline pair: tracks current state when no AI baseline has been captured,
+  // otherwise stays frozen at the AI's read. The baseline lock happens inside
+  // applyAnalysis() after Auto-Analyze finishes.
+  if (!baselineScores) {
+    document.getElementById('finalScore').innerHTML = `${total}<span class="score-max">/57</span>`;
+    document.getElementById('finalScore').style.color = color;
+    document.getElementById('verdictTitle').textContent = title;
+    document.getElementById('verdictTitle').style.color = color;
+  }
+
   document.getElementById('liveScore').textContent = total;
   document.getElementById('liveScore').style.color = color;
   document.getElementById('liveScore').classList.add('pulse-score');
@@ -1317,11 +1652,12 @@ function calculate() {
 
   const progress = document.getElementById('scoreProgressFill');
   if (progress) {
-    const pct = Math.round((total / 60) * 100);
+    const pct = Math.round((total / 57) * 100);
     progress.style.width = pct + '%';
     progress.style.backgroundPosition = (100 - pct) + '% 0';
   }
 
+  updateCommunityScoreIndicator();
   return total;
 }
 
@@ -1333,12 +1669,12 @@ function updateRowState(prefix, i, checked, color) {
 }
 
 function getVerdict(score) {
-  if (score >= 52) return { title: subjectType === 'candidate' ? 'THE VANGUARD' : 'TRANSFORMATIVE LAW', color: 'var(--green)', desc: 'A rare, exemplary record. This subject has demonstrated extraordinary commitment to structural change, consistently prioritizing community over politics, and delivering measurable, lasting outcomes.' };
-  if (score >= 42) return { title: subjectType === 'candidate' ? 'THE WORKER' : 'PROGRESSIVE REFORM', color: '#6eddb5', desc: 'A strong, consistent record of action. Not perfect, but genuinely committed — with real deliverables that moved the needle in meaningful ways.' };
-  if (score >= 32) return { title: subjectType === 'candidate' ? 'THE PRAGMATIST' : 'INCREMENTAL REFORM', color: 'var(--blue)', desc: 'Mixed record with genuine effort. Some real wins alongside missed opportunities. Context matters — evaluate whether limitations were structural or personal.' };
-  if (score >= 20) return { title: subjectType === 'candidate' ? 'THE POLITICIAN' : 'MAINTENANCE BILL', color: 'var(--gold)', desc: 'More talk than action. Adequate on the surface, but the record shows more alignment with institutional comfort than genuine structural challenge.' };
-  if (score >= 10) return { title: subjectType === 'candidate' ? 'THE OBSTACLE' : 'HARMFUL POLICY', color: 'var(--orange)', desc: 'Actively worked against the interests of the community, whether by commission or omission. The harm is real, even if the intent was complex.' };
-  return { title: subjectType === 'candidate' ? 'THE OPPOSITION' : 'DETRIMENTAL POLICY', color: 'var(--red)', desc: 'A clear record of harm. Whether through betrayal, complicity with oppressive systems, or blocking progress — the evidence speaks for itself.' };
+  if (score >= 44) return { title: subjectType === 'candidate' ? 'THE VANGUARD' : 'TRANSFORMATIVE LAW', color: 'var(--green)', desc: 'A rare, exemplary record. This subject has demonstrated extraordinary commitment to structural change, consistently prioritizing community over politics, and delivering measurable, lasting outcomes.' };
+  if (score >= 35) return { title: subjectType === 'candidate' ? 'THE WORKER' : 'PROGRESSIVE REFORM', color: '#6eddb5', desc: 'A strong, consistent record of action. Not perfect, but genuinely committed — with real deliverables that moved the needle in meaningful ways.' };
+  if (score >= 26) return { title: subjectType === 'candidate' ? 'THE PRAGMATIST' : 'INCREMENTAL REFORM', color: 'var(--blue)', desc: 'Mixed record with genuine effort. Some real wins alongside missed opportunities. Context matters — evaluate whether limitations were structural or personal.' };
+  if (score >= 16) return { title: subjectType === 'candidate' ? 'THE POLITICIAN' : 'MAINTENANCE BILL', color: 'var(--gold)', desc: 'More talk than action. Adequate on the surface, but the record shows more alignment with institutional comfort than genuine structural challenge.' };
+  if (score >= 7)  return { title: subjectType === 'candidate' ? 'THE BYSTANDER' : 'LOW ALIGNMENT POLICY', color: 'var(--orange)', desc: 'Limited alignment with these values based on the available record. This may reflect different priorities, limited institutional power, or insufficient documentation — not necessarily active harm.' };
+  return { title: subjectType === 'candidate' ? 'THE MISALIGNED' : 'MISALIGNED POLICY', color: 'var(--red)', desc: 'The documented record shows little to no alignment with these core values. This reflects a significant gap between the subject\'s record and the framework\'s criteria, not a judgment of the person\'s character.' };
 }
 
 // ══════════════════════════════════════════════
@@ -1365,6 +1701,25 @@ function updateResultsView() {
   document.getElementById('sb-fruit').style.width = (scores.fruit/MAX.fruit*100) + '%';
   document.getElementById('sb-vis').style.width = (scores.vis/MAX.vis*100) + '%';
 
+  // Subject metadata strip (shown once a name exists)
+  const meta = document.getElementById('shareCardMeta');
+  if (meta) {
+    const nm = document.getElementById('nameInput')?.value?.trim();
+    if (nm) {
+      meta.style.display = 'block';
+      const juris  = document.getElementById('jurisdictionInput')?.value?.trim() || '—';
+      const office = (document.getElementById('officeInput')?.value?.trim() || document.getElementById('yearInput')?.value?.trim()) || '';
+      document.getElementById('scmName').textContent = nm;
+      document.getElementById('scmPathway').textContent = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
+      document.getElementById('scmJurisdiction').textContent = juris;
+      document.getElementById('scmOffice').textContent = office || '—';
+      document.getElementById('scmOfficeWrap').style.display = office ? 'block' : 'none';
+      document.getElementById('scmDate').textContent = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+    } else {
+      meta.style.display = 'none';
+    }
+  }
+
   drawRadar(scores.root, scores.branch, scores.fruit, scores.vis, scores.toxic);
 }
 
@@ -1376,7 +1731,7 @@ function drawRadar(root, branch, fruit, vis, toxic) {
   const cx = size/2, cy = size/2, r = size*0.38;
 
   const labels = ['Root', 'Branches', 'Fruit', 'Light', 'Clean'];
-  const vals = [root/25, branch/10, fruit/15, vis/10, 1-(toxic/15)];
+  const vals = [root/25, branch/12, fruit/15, vis/10, 1-(toxic/15)];
   const colors = ['#c8a96e','#5ba3f5','#52d48a','#f0913a','#e85555'];
   const n = 5;
 
@@ -1392,7 +1747,7 @@ function drawRadar(root, branch, fruit, vis, toxic) {
       i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
     ctx.closePath();
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1; ctx.stroke();
   }
 
   // Spokes
@@ -1400,7 +1755,7 @@ function drawRadar(root, branch, fruit, vis, toxic) {
     const angle = (i/n)*Math.PI*2 - Math.PI/2;
     ctx.beginPath(); ctx.moveTo(cx,cy);
     ctx.lineTo(cx+Math.cos(angle)*r, cy+Math.sin(angle)*r);
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1; ctx.stroke();
   }
 
   // Fill
@@ -1437,6 +1792,10 @@ function drawRadar(root, branch, fruit, vis, toxic) {
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║                  ⚠️  LOCKED PROMPT — DO NOT MODIFY  ⚠️           ║
 // ║                                                                  ║
+// ║  Baseline updated: 6-branch scoring + subjectPathway + funders.  ║
+// ║  Prior baseline was the 5-branch / 60-pt version tested against  ║
+// ║  Billion Godson. This version MUST be re-tested against Billion  ║
+// ║  Godson before being treated as the new locked baseline.         ║
 // ║  This prompt is the confirmed working baseline as of the         ║
 // ║  session where Billion Godson was accurately evaluated.          ║
 // ║                                                                  ║
@@ -1455,7 +1814,7 @@ Do not provide vague summaries. You must score them on the specific criteria bel
 
 **CRITICAL CONTEXT**: Consider the full spectrum of leadership. An elected official is evaluated on legislation and votes. A community leader, organizer, or activist is evaluated equally rigorously on their organizing record, coalitions built, institutions created, policy shifts they drove, and documented community impact. Both pathways are valid and equally weighted in this framework. Do NOT default to low scores for community leaders simply because they lack a voting record — their civic record IS their record.
 
-Also provide a brief but substantive historical background (2-3 paragraphs) covering who this person is, their key contributions, and why their work matters. List notable endorsements/supporters and prominent opposition.
+Also provide a brief but substantive historical background (2-3 paragraphs) covering who this person is, their key contributions, and why their work matters. List notable endorsements/supporters, prominent opposition, and known funders or financial backers — including PACs, industry donors, dark money networks, or major individual contributors where documented. Also determine whether this subject operates primarily as an elected or appointed official, or as a community leader, organizer, or activist — and return the appropriate pathway value.
 
 CRITERIA & SCORING:
 
@@ -1472,6 +1831,7 @@ CRITERIA & SCORING:
    - Housing Advocacy: Fought for tenant protections or homelessness solutions.
    - Justice Reform Advocacy: Supported, organized for, or co-sponsored efforts reducing carceral harms.
    - Intergenerational Wealth Advocacy: Advocated for long-term asset creation.
+   - Education Reform (Black Communities): Advocated specifically for improvement of public schools serving Black communities — funding equity, curriculum reform, anti-segregation. Mark TRUE only for public-school advocacy. Voucher/charter advocacy that diverts resources from public schools does NOT qualify; note it in the reasoning as a nuance flag instead.
 
 3. FRUIT (Results) - Score 0-3 (Integer)
    For elected officials: score based on legislation, budgets, and institutional outcomes.
@@ -1500,8 +1860,10 @@ You MUST include specific sources in the 'sources' array. For each source includ
 RETURN JSON ONLY:
 {
   "historicalBackground": "2-3 substantive paragraphs — rich and specific, do not truncate",
+  "subjectPathway": "elected or community",
   "supporters": ["Supporter 1", "Supporter 2"],
   "opponents": ["Opponent 1"],
+  "funders": ["Funder, PAC, or financial backer 1", "Funder 2"],
   "root": [
     {"met": boolean, "reasoning": "specific evidence"},
     {"met": boolean, "reasoning": "specific evidence"},
@@ -1510,6 +1872,7 @@ RETURN JSON ONLY:
     {"met": boolean, "reasoning": "specific evidence"}
   ],
   "branches": [
+    {"met": boolean, "reasoning": "specific evidence"},
     {"met": boolean, "reasoning": "specific evidence"},
     {"met": boolean, "reasoning": "specific evidence"},
     {"met": boolean, "reasoning": "specific evidence"},
@@ -1557,6 +1920,7 @@ async function autoAnalyze() {
 
   setLoading(true);
   resetChecks();
+  baselineScores = null;  // cleared so the footer animates live; re-locked when analysis completes
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('auditBox').style.display = 'none';
   document.getElementById('confidenceWrap').style.display = 'none';
@@ -1595,6 +1959,11 @@ async function autoAnalyze() {
 }
 
 async function applyAnalysis(data) {
+  // Auto-detect pathway from AI response
+  if (data.subjectPathway && (data.subjectPathway === 'elected' || data.subjectPathway === 'community')) {
+    setPathway(data.subjectPathway);
+  }
+
   // Confidence
   if (data.evidenceQuality !== undefined || data.confidence !== undefined) {
     const qual = data.evidenceQuality ?? data.confidence;
@@ -1610,8 +1979,9 @@ async function applyAnalysis(data) {
   for (let i = 0; i < 5; i++) {
     if (data.root[i]?.met) { await delay(120); rootCBs[i].checked = true; calculate(); }
   }
-  // Branches
-  for (let i = 0; i < 5; i++) {
+  // Branches (6 items: 5 legacy + Education Reform)
+  const branchCount = branchCBs.length;
+  for (let i = 0; i < branchCount; i++) {
     if (data.branches[i]?.met) { await delay(120); branchCBs[i].checked = true; calculate(); }
   }
   // Fruit
@@ -1626,6 +1996,11 @@ async function applyAnalysis(data) {
   for (let i = 0; i < 3; i++) {
     if (data.toxic[i]?.present) { await delay(200); toxicCBs[i].checked = true; calculate(); }
   }
+
+  // Lock the AI baseline. After this point, any further edit to the form
+  // becomes the "Adjusted" score and shows in the Community Score Indicator.
+  captureBaseline();
+  calculate();
 
   renderAuditReport(data);
 }
@@ -1646,14 +2021,15 @@ function renderAuditReport(data) {
       <p style="font-size:12px;line-height:1.7;color:var(--text-dim);">${data.historicalBackground}</p></div>`;
   }
 
-  // Supporters/Opponents
-  if ((data.supporters?.length) || (data.opponents?.length)) {
-    html += `<div class="audit-section"><div class="supporters-grid">`;
+  // Supporters/Opponents/Funders
+  if ((data.supporters?.length) || (data.opponents?.length) || (data.funders?.length)) {
+    const colCount = [data.supporters?.length, data.opponents?.length, data.funders?.length].filter(Boolean).length;
+    html += `<div class="audit-section"><div class="supporters-grid" style="grid-template-columns:repeat(${colCount},1fr);">`;
     if (data.supporters?.length) {
       html += `<div class="supporter-panel" style="background:var(--green-dim);border:1px solid rgba(82,212,138,0.2);">
         <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--green);margin-bottom:8px;">
           <i class="fa-solid fa-thumbs-up" style="margin-right:4px;"></i>${isCandidate ? 'Supporters' : 'Proponents'}</div>
-        <ul style="list-style:none;font-size:12px;color:var(--text-dim);space-y:4px;">
+        <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
           ${data.supporters.map(s => `<li style="padding:2px 0;">· ${s}</li>`).join('')}
         </ul></div>`;
     }
@@ -1665,13 +2041,21 @@ function renderAuditReport(data) {
           ${data.opponents.map(o => `<li style="padding:2px 0;">· ${o}</li>`).join('')}
         </ul></div>`;
     }
+    if (data.funders?.length) {
+      html += `<div class="supporter-panel" style="background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);">
+        <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--purple);margin-bottom:8px;">
+          <i class="fa-solid fa-money-bill-trend-up" style="margin-right:4px;"></i>Funders & Backers</div>
+        <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
+          ${data.funders.map(f => `<li style="padding:2px 0;">· ${f}</li>`).join('')}
+        </ul></div>`;
+    }
     html += `</div></div>`;
   }
 
   const rootLabels = ['Liberty & Anti-Carceral','Justice & Reparations','Solidarity & Agency','Safety & Housing','Fiscal Integrity'];
   const branchLabels = isCandidate
-    ? ['Economic Transfer','Institutional Protection','Housing & Homelessness','Criminal Justice Reform','Intergenerational Wealth']
-    : ['Economic Transfer Mechanisms','Institutional Protection','Housing Solutions','Justice Reform Mechanisms','Intergenerational Wealth Structures'];
+    ? ['Economic Transfer','Institutional Protection','Housing & Homelessness','Criminal Justice Reform','Intergenerational Wealth','Education Reform']
+    : ['Economic Transfer Mechanisms','Institutional Protection','Housing Solutions','Justice Reform Mechanisms','Intergenerational Wealth Structures','Education Reform Provisions'];
   const fruitLabels = ['Economic Transfer','Institutional Protection','Housing Mitigation','Criminal Justice','Intergenerational Wealth'];
   const toxicLabels = isCandidate ? ['The Gatekeeper','The Plantation','The Betrayal'] : ['The Carve-Out','The Trojan Horse','The Unfunded Mandate'];
 
@@ -1822,13 +2206,16 @@ function buildAuditObject() {
     name, subjectType, total, verdict: title,
     date: new Date().toLocaleDateString(),
     pathway: currentPathway,
+    peoplesChoice: !!document.getElementById('peoplesChoiceCB')?.checked,
     scores: { ...scores },
     fruitVals: Array.from(fruitSls).map(s => +s.value),
     visVal: +visSlider.value,
     rootChecked: Array.from(rootCBs).map(c => c.checked),
     branchChecked: Array.from(branchCBs).map(c => c.checked),
     toxicChecked: Array.from(toxicCBs).map(c => c.checked),
-
+    baselineScores: baselineScores,
+    justifications: getJustifications(),
+    analysisData: lastAnalysisData
   };
 }
 
@@ -1880,12 +2267,42 @@ function loadAudit(id) {
   setType(audit.subjectType);
   if (audit.pathway) setPathway(audit.pathway);
   document.getElementById('nameInput').value = audit.name;
-  audit.rootChecked.forEach((v,i) => rootCBs[i].checked = v);
-  audit.branchChecked.forEach((v,i) => branchCBs[i].checked = v);
-  audit.fruitVals.forEach((v,i) => fruitSls[i].value = v);
-  visSlider.value = audit.visVal;
-  audit.toxicChecked.forEach((v,i) => toxicCBs[i].checked = v);
+  // Tolerate older saved audits whose branchChecked has only 5 entries
+  (audit.rootChecked || []).forEach((v,i) => { if (rootCBs[i]) rootCBs[i].checked = v; });
+  (audit.branchChecked || []).forEach((v,i) => { if (branchCBs[i]) branchCBs[i].checked = v; });
+  (audit.fruitVals || []).forEach((v,i) => { if (fruitSls[i]) fruitSls[i].value = v; });
+  visSlider.value = audit.visVal ?? 0;
+  (audit.toxicChecked || []).forEach((v,i) => { if (toxicCBs[i]) toxicCBs[i].checked = v; });
+  // People's Choice
+  const pcCB = document.getElementById('peoplesChoiceCB');
+  if (pcCB) {
+    pcCB.checked = !!audit.peoplesChoice;
+    const pcPts = document.getElementById('pcPtsLabel');
+    if (pcPts) pcPts.style.opacity = pcCB.checked ? '1' : '0.3';
+  }
+  // Restore the AI audit report if present
+  if (audit.analysisData) {
+    lastAnalysisData = audit.analysisData;
+    renderAuditReport(audit.analysisData);
+  }
+  // Restore captured baseline so the Community Assessment indicator works
+  baselineScores = audit.baselineScores || null;
+  // Restore justifications
+  const justs = audit.justifications || {};
+  ['Root','Branch','Fruit','Vis','Toxic','Peoples'].forEach(k => {
+    const el = document.getElementById('just' + k);
+    if (el) el.value = justs[k.toLowerCase()] || '';
+  });
   calculate();
+  // If a baseline existed, lock the Baseline footer pair to that snapshot
+  if (baselineScores) {
+    const baselineTotal = baselineScores.root + baselineScores.branch + baselineScores.fruit - baselineScores.toxic + (baselineScores.peoplesChoice ? 5 : 0);
+    const { title, color } = getVerdict(baselineTotal);
+    document.getElementById('finalScore').innerHTML = `${baselineTotal}<span class="score-max">/57</span>`;
+    document.getElementById('finalScore').style.color = color;
+    document.getElementById('verdictTitle').textContent = title;
+    document.getElementById('verdictTitle').style.color = color;
+  }
   showView('assess');
   showToast('Audit loaded: ' + audit.name);
 }
@@ -1953,10 +2370,10 @@ function getVerdictByTitle(title) {
     'INCREMENTAL REFORM':['var(--blue)',  'pragmatist'],
     'THE POLITICIAN':   ['var(--gold)',   'politician'],
     'MAINTENANCE BILL': ['var(--gold)',   'politician'],
-    'THE OBSTACLE':     ['var(--orange)', 'obstacle'],
-    'HARMFUL POLICY':   ['var(--orange)', 'obstacle'],
-    'THE OPPOSITION':   ['var(--red)',    'opposition'],
-    'DETRIMENTAL POLICY':['var(--red)',   'opposition']
+    'THE BYSTANDER':       ['var(--orange)', 'bystander'],
+    'LOW ALIGNMENT POLICY':['var(--orange)', 'bystander'],
+    'THE MISALIGNED':      ['var(--red)',    'misaligned'],
+    'MISALIGNED POLICY':   ['var(--red)',    'misaligned']
   };
   const [color, tier] = map[title] || ['var(--text-dim)', 'none'];
   return { color, tier };
@@ -1968,7 +2385,7 @@ function getVerdictByTitle(title) {
 function populateCompareSelects() {
   const audits = getSavedAudits();
   const opts = audits.length
-    ? ['<option value="">— Select —</option>', ...audits.map(a => `<option value="${a.id}">${a.name} (${a.total}/60)</option>`)].join('')
+    ? ['<option value="">— Select —</option>', ...audits.map(a => `<option value="${a.id}">${a.name} (${a.total}/57)</option>`)].join('')
     : '<option value="">No saved audits</option>';
   ['compareA','compareB'].forEach(id => document.getElementById(id).innerHTML = opts);
   document.getElementById('compareEmpty').style.display = audits.length < 2 ? 'block' : 'none';
@@ -1989,7 +2406,7 @@ function runComparison() {
   document.getElementById('compareGrid').innerHTML = [a,b].map(audit => {
     const { color } = getVerdictByTitle(audit.verdict);
     const cats = ['Root','Branches','Fruit','Visibility'];
-    const maxes = [25,10,15,10];
+    const maxes = [25,12,15,10];
     const vals = [audit.scores.root, audit.scores.branch, audit.scores.fruit, audit.scores.vis];
     return `<div class="compare-panel">
       <div class="compare-panel-header" style="display:flex;justify-content:space-between;align-items:center;">
@@ -2074,14 +2491,14 @@ function copyReport() {
     `Subject: ${name}`,
     `Type: ${subjectType}`,
     '',
-    `SCORE: ${total}/60`,
+    `SCORE: ${total}/57`,
     `VERDICT: ${title}`,
     '',
     'BREAKDOWN:',
     `  🌱 Root (Values):      ${scores.root}/25`,
-    `  📣 Branches:           ${scores.branch}/10`,
+    `  📣 Branches:           ${scores.branch}/12`,
     `  🍎 Fruit (Outcomes):   ${scores.fruit}/15`,
-    `  ☀️  Visibility:         ${scores.vis}/10`,
+    `  ☀️  Visibility:         ${scores.vis}/10  (separate indicator)`,
     `  ☠️  Penalties:          −${scores.toxic}`,
     '',
     'Graded via Root & Fruit Calculator'
@@ -2104,48 +2521,57 @@ function exportPDF() {
   const W = 210, margin = 20;
   let y = margin;
 
-  // Header
-  doc.setFillColor(8,8,8); doc.rect(0,0,W,40,'F');
-  doc.setTextColor(200,169,110); doc.setFontSize(22); doc.setFont('helvetica','bold');
-  doc.text('ROOT & FRUIT', margin, y+8);
-  doc.setTextColor(255,255,255); doc.setFontSize(10);
-  doc.text('INTEGRITY INDEX', margin, y+15);
-  doc.setFontSize(9); doc.setTextColor(136,136,136);
-  doc.text('Generated ' + new Date().toLocaleDateString(), W-margin, y+8, { align:'right' });
-  y = 50;
+  const pathway = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
+  const pcAwarded = !!document.getElementById('peoplesChoiceCB')?.checked;
 
-  doc.setTextColor(30,30,30); doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  // Eggshell page background
+  doc.setFillColor(245,241,232); doc.rect(0,0,W,297,'F');
+
+  // Navy header
+  doc.setFillColor(13,27,62); doc.rect(0,0,W,40,'F');
+  doc.setFillColor(139,105,20); doc.rect(0,40,W,1.2,'F');
+  doc.setTextColor(255,255,255); doc.setFontSize(22); doc.setFont('helvetica','bold');
+  doc.text('ROOT & FRUIT', margin, y+8);
+  doc.setTextColor(232,201,106); doc.setFontSize(10);
+  doc.text('INTEGRITY INDEX', margin, y+15);
+  doc.setFontSize(9); doc.setTextColor(200,200,200);
+  doc.text('Generated ' + new Date().toLocaleDateString(), W-margin, y+8, { align:'right' });
+  doc.text(pathway, W-margin, y+15, { align:'right' });
+  y = 52;
+
+  doc.setTextColor(26,26,24); doc.setFont('helvetica','bold'); doc.setFontSize(16);
   doc.text(name, margin, y); y += 8;
-  doc.setFontSize(10); doc.setFont('helvetica','normal'); doc.setTextColor(100,100,100);
-  doc.text(subjectType.toUpperCase() + ' · ' + title + ' · ' + total + '/60 pts', margin, y); y += 12;
+  doc.setFontSize(10); doc.setFont('helvetica','normal'); doc.setTextColor(90,82,72);
+  doc.text(subjectType.toUpperCase() + ' · ' + title + ' · ' + total + '/57 pts', margin, y); y += 12;
 
   const sections = [
-    ['🌱 Root (Values)', scores.root, 25],
-    ['📣 Branches', scores.branch, 10],
-    ['🍎 Fruit (Outcomes)', scores.fruit, 15],
-    ['☀️ Visibility', scores.vis, 10],
-    ['☠️ Penalties', -scores.toxic, 0]
+    ['Root (Values)', scores.root, 25],
+    ['Branches (Advocacy)', scores.branch, 12],
+    ['Fruit (Outcomes)', scores.fruit, 15],
+    ['The Light (separate indicator)', scores.vis, 10],
+    ['Toxic Penalties', -scores.toxic, 0]
   ];
+  if (pcAwarded) sections.push(["People's Choice", 5, 0]);
 
-  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(139,105,20);
   doc.text('SCORE BREAKDOWN', margin, y); y += 6;
-  doc.setDrawColor(200,169,110); doc.line(margin, y, W-margin, y); y += 6;
+  doc.setDrawColor(139,105,20); doc.line(margin, y, W-margin, y); y += 6;
 
   sections.forEach(([label, val, max]) => {
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(60,60,60);
     doc.text(label, margin, y);
-    const scoreText = max ? val + ' / ' + max : (val < 0 ? val : '+'+val);
+    const scoreText = max ? val + ' / ' + max : (val < 0 ? String(val) : '+'+val);
     doc.text(scoreText, W-margin, y, { align:'right' });
     if (max) {
-      doc.setFillColor(230,230,230); doc.roundedRect(margin, y+2, W-margin*2, 3, 1.5, 1.5, 'F');
-      doc.setFillColor(200,169,110); doc.roundedRect(margin, y+2, (W-margin*2)*(val/max), 3, 1.5, 1.5, 'F');
+      doc.setFillColor(232,226,212); doc.roundedRect(margin, y+2, W-margin*2, 3, 1.5, 1.5, 'F');
+      doc.setFillColor(139,105,20); doc.roundedRect(margin, y+2, (W-margin*2)*Math.min(1,val/max), 3, 1.5, 1.5, 'F');
     }
     y += 12;
   });
 
   y += 4;
   doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
-  doc.text('FINAL SCORE: ' + total + '/60 — ' + title, margin, y); y += 10;
+  doc.text('FINAL SCORE: ' + total + '/57 — ' + title, margin, y); y += 10;
 
   if (lastAnalysisData?.summary) {
     doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(50,50,50);
@@ -2160,12 +2586,12 @@ function exportPDF() {
     doc.text('HISTORICAL BACKGROUND', margin, y); y += 5;
     doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
     const lines = doc.splitTextToSize(lastAnalysisData.historicalBackground, W-margin*2);
-    if (y + lines.length*5 > 280) { doc.addPage(); y = margin; }
+    if (y + lines.length*5 > 280) { doc.addPage(); doc.setFillColor(245,241,232); doc.rect(0,0,W,297,'F'); y = margin; }
     doc.text(lines, margin, y); y += lines.length * 5 + 6;
   }
 
-  doc.setFontSize(8); doc.setTextColor(160,160,160);
-  doc.text('Root & Fruit Integrity Index · rootandfruit.app', W/2, 290, { align:'center' });
+  doc.setFontSize(8); doc.setTextColor(154,144,128);
+  doc.text('Root & Fruit Integrity Index™ · Cast Your Net Media and Technologies · rootandfruit.app', W/2, 290, { align:'center' });
 
   doc.save(`Root-Fruit-${name.replace(/\s+/g,'-')}.pdf`);
   showToast('PDF exported!');
@@ -2190,8 +2616,28 @@ function resetAll() {
   toxicCBs.forEach(c => c.checked = false);
   document.getElementById('nameInput').value = '';
   document.getElementById('errorBox').style.display = 'none';
-  for (let i = 0; i < 5; i++) { ['rc','bc'].forEach(p => { const el = document.getElementById(p+i); if(el) el.classList.remove('checked-gold','checked-blue','checked-red'); }); }
+  const pcCB = document.getElementById('peoplesChoiceCB');
+  if (pcCB) pcCB.checked = false;
+  const pcPts = document.getElementById('pcPtsLabel');
+  if (pcPts) pcPts.style.opacity = '0.3';
+  lastAnalysisData = null;
+  baselineScores = null;
+  const auditBox = document.getElementById('auditBox');
+  if (auditBox) auditBox.style.display = 'none';
+  // Clear justifications
+  ['Root','Branch','Fruit','Vis','Toxic','Peoples'].forEach(k => {
+    const el = document.getElementById('just' + k);
+    if (el) el.value = '';
+  });
+  // Branches now has 6 rows
+  for (let i = 0; i < 6; i++) { const el = document.getElementById('bc'+i); if(el) el.classList.remove('checked-gold','checked-blue','checked-red'); }
+  for (let i = 0; i < 5; i++) { const el = document.getElementById('rc'+i); if(el) el.classList.remove('checked-gold','checked-blue','checked-red'); }
   for (let i = 0; i < 3; i++) { const el = document.getElementById('tx'+i); if(el) el.classList.remove('active'); }
+  // Reset Adjusted pair to placeholder
+  const adjEl  = document.getElementById('adjustedScore');
+  const adjVEl = document.getElementById('adjustedVerdictTitle');
+  if (adjEl)  { adjEl.innerHTML = '0<span class="score-max">/57</span>'; adjEl.style.color = 'var(--text-dimmer)'; }
+  if (adjVEl) { adjVEl.textContent = 'UNGRADED'; adjVEl.style.color = 'var(--text-dimmer)'; }
   calculate();
 }
 
@@ -2258,104 +2704,94 @@ function drawShareCard() {
   const canvas = document.getElementById('shareCardCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const W = 600, H = 315;
+  const W = 600, H = 330;
   canvas.width = W; canvas.height = H;
 
   const total = calculate();
   const name = document.getElementById('nameInput').value || 'Unknown Subject';
+  const pathway = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
   const { title, color } = getVerdict(total);
 
-  // BG
-  ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H);
+  // Map CSS verdict colors to concrete hex for canvas
+  const vColor = (() => {
+    const m = { 'var(--green)':'#2a9d5c', '#6eddb5':'#4a9e6e', 'var(--blue)':'#2563a8',
+                'var(--gold)':'#8B6914', 'var(--orange)':'#c4620a', 'var(--red)':'#c0392b' };
+    return m[color] || '#8B6914';
+  })();
 
-  // Subtle grid pattern
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 30) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y = 0; y < H; y += 30) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  const EGG='#F5F1E8', NAVY='#0D1B3E', GOLD='#8B6914', GOLD_B='#E8C96A',
+        CREAM='#E8E2D4', INK='#1a1a18', DIM='#6B6258';
 
-  // Gold accent bar left
-  ctx.fillStyle = '#c8a96e'; ctx.fillRect(0, 0, 4, H);
+  // Body
+  ctx.fillStyle = EGG; ctx.fillRect(0, 0, W, H);
+  // Navy header bar
+  ctx.fillStyle = NAVY; ctx.fillRect(0, 0, W, 44);
+  ctx.fillStyle = GOLD; ctx.fillRect(0, 44, W, 2);
 
-  // Score circle
-  const cx = W - 90, cy = H / 2;
-  ctx.beginPath(); ctx.arc(cx, cy, 60, 0, Math.PI * 2);
-  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
-  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+  // Brand in header
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial';
+  ctx.fillText('ROOT & FRUIT', 24, 23);
+  ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px Arial';
+  ctx.fillText('INTEGRITY INDEX', 24 + ctx.measureText('ROOT & FRUIT  ').width, 23);
+  // Pathway pill (right)
+  ctx.font = 'bold 9px Arial';
+  const ptw = ctx.measureText(pathway.toUpperCase()).width + 18;
+  ctx.fillStyle = 'rgba(232,201,106,0.18)';
+  ctx.beginPath(); ctx.roundRect(W-24-ptw, 12, ptw, 20, 5); ctx.fill();
+  ctx.fillStyle = GOLD_B; ctx.textAlign = 'center';
+  ctx.fillText(pathway.toUpperCase(), W-24-ptw/2, 23);
 
-  // Score arc
-  const pct = total / 60;
-  ctx.beginPath(); ctx.arc(cx, cy, 60, -Math.PI/2, -Math.PI/2 + pct * Math.PI * 2);
-  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.stroke();
-
-  ctx.fillStyle = color;
-  ctx.font = 'bold 38px "Arial"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(total, cx, cy - 8);
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '12px "Arial"'; ctx.fillText('/ 60', cx, cy + 18);
-
-  // Left content
-  const lx = 36;
-
-  // Brand
-  ctx.fillStyle = '#c8a96e';
-  ctx.font = 'bold 13px "Arial"'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText('ROOT & FRUIT  ·  INTEGRITY INDEX', lx, 28);
-
+  const lx = 28;
   // Name
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 28px "Arial"'; ctx.textBaseline = 'top';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = INK;
+  let nameFS = 28; ctx.font = `bold ${nameFS}px Arial`;
   const maxNameW = W - 200;
-  let nameFontSize = 28;
-  ctx.font = `bold ${nameFontSize}px Arial`;
-  while (ctx.measureText(name).width > maxNameW && nameFontSize > 14) {
-    nameFontSize--; ctx.font = `bold ${nameFontSize}px Arial`;
-  }
-  ctx.fillText(name, lx, 64);
-
+  while (ctx.measureText(name).width > maxNameW && nameFS > 15) { nameFS--; ctx.font = `bold ${nameFS}px Arial`; }
+  ctx.fillText(name, lx, 62);
   // Verdict
-  ctx.fillStyle = color;
-  ctx.font = `bold 18px "Arial"`; ctx.textBaseline = 'top';
-  ctx.fillText(title, lx, 64 + nameFontSize + 10);
+  ctx.fillStyle = vColor; ctx.font = 'bold 17px Arial';
+  ctx.fillText(title, lx, 62 + nameFS + 8);
+
+  // Score circle (right)
+  const cx = W - 86, cy = 150;
+  ctx.beginPath(); ctx.arc(cx, cy, 56, 0, Math.PI*2);
+  ctx.strokeStyle = CREAM; ctx.lineWidth = 8; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 56, -Math.PI/2, -Math.PI/2 + (total/57)*Math.PI*2);
+  ctx.strokeStyle = vColor; ctx.lineWidth = 8; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = vColor; ctx.font = 'bold 36px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(total, cx, cy - 6);
+  ctx.fillStyle = DIM; ctx.font = 'bold 12px Arial';
+  ctx.fillText('/ 57', cx, cy + 18);
 
   // Score bars
-  const barY = 160;
-  const barW = 280;
+  const barY = 150, barW = 260, bx = lx + 78;
   const cats = [
-    { label: 'Root', val: scores.root, max: 25, color: '#c8a96e' },
-    { label: 'Branches', val: scores.branch, max: 10, color: '#5ba3f5' },
-    { label: 'Fruit', val: scores.fruit, max: 15, color: '#52d48a' },
-    { label: 'Light', val: scores.vis, max: 10, color: '#f0913a' },
+    { label: 'ROOT',     val: scores.root,   max: 25, c: '#8B6914' },
+    { label: 'BRANCHES', val: scores.branch, max: 12, c: '#2563a8' },
+    { label: 'FRUIT',    val: scores.fruit,  max: 15, c: '#2a9d5c' },
   ];
+  if (scores.toxic > 0) cats.push({ label: 'TOXIC', val: scores.toxic, max: 8, c: '#c0392b', neg: true });
   cats.forEach((cat, i) => {
-    const y = barY + i * 34;
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '11px Arial'; ctx.textBaseline = 'middle';
+    const y = barY + i * 30;
+    ctx.fillStyle = GOLD; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(cat.label, lx, y + 7);
-    const bx = lx + 70;
-    ctx.fillStyle = '#2a2a2a'; ctx.beginPath();
-    ctx.roundRect(bx, y, barW, 14, 7); ctx.fill();
-    const filled = (cat.val / cat.max) * barW;
-    if (filled > 0) {
-      ctx.fillStyle = cat.color; ctx.beginPath();
-      ctx.roundRect(bx, y, filled, 14, 7); ctx.fill();
-    }
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = '10px Arial'; ctx.textAlign = 'right';
-    ctx.fillText(`${cat.val}/${cat.max}`, bx + barW + 36, y + 7);
+    ctx.fillStyle = CREAM; ctx.beginPath(); ctx.roundRect(bx, y, barW, 13, 6.5); ctx.fill();
+    const filled = Math.min(1, cat.val/cat.max) * barW;
+    if (filled > 0) { ctx.fillStyle = cat.c; ctx.beginPath(); ctx.roundRect(bx, y, filled, 13, 6.5); ctx.fill(); }
+    ctx.fillStyle = INK; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'right';
+    ctx.fillText(`${cat.neg ? '−' : ''}${cat.val}/${cat.max}`, bx + barW + 36, y + 7);
     ctx.textAlign = 'left';
   });
 
-  // Penalty
-  if (scores.toxic > 0) {
-    ctx.fillStyle = '#e85555';
-    ctx.font = '11px Arial'; ctx.textBaseline = 'middle';
-    ctx.fillText(`☠ −${scores.toxic} penalty`, lx, barY + 4 * 34 + 7);
-  }
-
-  // Footer
-  ctx.fillStyle = 'rgba(255,255,255,0.2)';
-  ctx.font = '11px Arial'; ctx.textBaseline = 'bottom';
-  ctx.fillText('rootandfruit.app', lx, H - 14);
+  // Navy footer
+  ctx.fillStyle = NAVY; ctx.fillRect(0, H-34, W, 34);
+  ctx.fillStyle = GOLD; ctx.fillRect(0, H-34, W, 1);
+  ctx.fillStyle = EGG; ctx.font = '9px Arial'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('rootandfruit.app', lx, H-17);
+  ctx.fillStyle = 'rgba(245,241,232,0.45)'; ctx.textAlign = 'right';
+  ctx.fillText('Root & Fruit Integrity Index™  ·  Cast Your Net Media and Technologies', W-20, H-17);
 }
 
 function downloadShareCard() {
@@ -2377,9 +2813,10 @@ function showView(v) {
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
   const viewEl = document.getElementById('view-'+v);
   if (viewEl) viewEl.classList.add('active');
-  const tabs = ['assess','results','compare','saved','methodology'];
+  const tabs = ['assess','community','results','compare','saved','methodology'];
   const idx = tabs.indexOf(v);
   if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+  if (v === 'community') updateCommunityScoreIndicator();
   if (v === 'results') { updateResultsView(); setTimeout(drawShareCard, 100); }
   if (v === 'saved') renderSavedList();
   if (v === 'compare') populateCompareSelects();

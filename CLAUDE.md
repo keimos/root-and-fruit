@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Root & Fruit** is a civic accountability tool that scores elected officials, community leaders, and policies/bills against a 60-point **Integrity Index** rooted in Black community-centered values.
+**Root & Fruit** is a civic accountability tool that scores elected officials, community leaders, and policies/bills against a 57-point **Integrity Index** rooted in Black community-centered values. (Plus an optional +5 "People's Choice" community bonus, and a separate 0–10 "Light" transparency indicator that does NOT factor into the composite score.)
 
 The app is two stateless Cloud Run services — a **frontend** (vanilla HTML/CSS/JS, single page) and a **backend** (Node + Express) — backed by **Firestore** for audit persistence and the **Anthropic API** for AI-driven auto-audits ("Forensic Audit") that combine adaptive thinking with server-side web search.
 
@@ -97,19 +97,23 @@ The frontend reads its backend URL from `window.__RF_CONFIG__.backendUrl`, which
 
 ### View model
 
-Five views are rendered as sibling `<div class="view">` elements; `showView(v)` toggles the `.active` class. The current view is also reflected in the top nav tabs.
+Six views are rendered as sibling `<div class="view">` elements; `showView(v)` toggles the `.active` class. The current view is also reflected in the top nav tabs.
 
 | View              | Purpose                                                          |
 |-------------------|------------------------------------------------------------------|
-| `assess`          | Subject input + 5 scoring cards (Root, Branches, Fruit, Light, Toxic) |
+| `assess`          | Subject input + Auto-Analyze + AI audit report. Links to Community Assessment for scoring. |
+| `community`       | The 6 scoring cards (Root, Branches, Fruit, Light, Toxic) + People's Choice + per-section justification textareas + baseline-vs-adjusted indicator. This is where the scoring inputs live. |
 | `results`         | Verdict, score breakdown, radar chart, share-card preview       |
 | `compare`         | Side-by-side comparison of two saved audits                     |
 | `saved`           | List of saved audits (cloud-first, local fallback)              |
 | `methodology`     | Static educational content explaining the framework             |
 
+`showView('community')` triggers `updateCommunityScoreIndicator()`.
 `showView('results')` triggers `updateResultsView()` and `drawShareCard()` (after a 100ms tick).
 `showView('saved')` triggers `renderSavedList()`.
 `showView('compare')` triggers `populateCompareSelects()`.
+
+**Baseline vs Adjusted:** `Auto-Analyze` fills the form, then `captureBaseline()` freezes the AI's read into `baselineScores`. Any later edit to a checkbox/slider/People's-Choice becomes the "Adjusted" community score. `calculate()` updates the Adjusted footer pair live; the Baseline pair stays frozen. `getCommunityDelta()` / `updateCommunityScoreIndicator()` drive the indicator in the Community view. `baselineScores` + justifications are persisted in the saved-audit object.
 
 > **NOTE:** `showView` is defined twice in the file. The second definition (near the bottom) is the canonical one and includes the `methodology` tab + share-card draw. The earlier one is dead code — leave it alone unless you're doing a focused cleanup PR.
 
@@ -125,26 +129,27 @@ When subject type is `candidate`, a second toggle exposes a **pathway**:
 
 The pathway changes the framing of "Fruit" scoring. Community-leader Fruit reflects organizing wins, institutions built, and lasting community impact — **not legislation**. The locked prompt enforces equal weight.
 
-### Scoring (60-point Integrity Index)
+### Scoring (57-point Integrity Index)
 
-| Section          | Mechanic                | Max | Notes                                                  |
-|------------------|-------------------------|----:|--------------------------------------------------------|
-| Root (Values)    | 5 checkboxes × 5 pts    |  25 | Boolean. Foundational worldview.                       |
-| Branches (Advocacy) | 5 checkboxes × 2 pts |  10 | Boolean. Public stances and organizing efforts.        |
-| Fruit (Outcomes) | 5 sliders × 0–3 pts     |  15 | Tiered: None / Talk / Pilot or Partial / Full impact.  |
-| Light (Visibility) | 1 slider 0–10 pts     |  10 | Documentation richness — voting AND organizing AND press AND testimony all count. |
-| Toxic Soil       | 3 checkboxes (penalties)| −15 | Subtracted: Gatekeeper −3, Plantation −4, Betrayal −8. (For policy: Carve-Out / Trojan Horse / Unfunded Mandate.) |
+| Section             | Mechanic                | Max | Notes                                                  |
+|---------------------|-------------------------|----:|--------------------------------------------------------|
+| Root (Values)       | 5 checkboxes × 5 pts    |  25 | Boolean. Foundational worldview.                       |
+| Branches (Advocacy) | 6 checkboxes × 2 pts    |  12 | Boolean. The 6th is "Education Reform (Black Communities)" — voucher/charter advocacy that diverts from public schools is a nuance flag, NOT a TRUE. |
+| Fruit (Outcomes)    | 5 sliders × 0–3 pts     |  15 | Tiered: None / Talk / Pilot or Partial / Full impact.  |
+| Toxic Soil          | 3 checkboxes (penalties)| −15 | Subtracted: Gatekeeper −3, Plantation −4, Betrayal −8. (For policy: Carve-Out / Trojan Horse / Unfunded Mandate.) |
+| People's Choice     | 1 community-awarded toggle | +5 | Optional community bonus. Off by default. |
+| Light (Visibility)  | 1 slider 0–10 pts       |  10 | **Separate indicator. Does NOT factor into the composite score.** Documentation richness — voting AND organizing AND press AND testimony all count. |
 
-`calculate()` recomputes total = `max(0, root + branch + fruit + vis - toxic)`. The verdict tiers in `getVerdict(score)`:
+`calculate()` recomputes total = `max(0, root + branch + fruit − toxic + peoplesChoiceBonus)`. The verdict tiers in `getVerdict(score)`:
 
-| Threshold | Candidate label  | Policy label          |
-|----------:|------------------|-----------------------|
-| ≥ 52      | THE VANGUARD     | TRANSFORMATIVE LAW    |
-| ≥ 42      | THE WORKER       | PROGRESSIVE REFORM    |
-| ≥ 32      | THE PRAGMATIST   | INCREMENTAL REFORM    |
-| ≥ 20      | THE POLITICIAN   | MAINTENANCE BILL      |
-| ≥ 10      | THE OBSTACLE     | HARMFUL POLICY        |
-| < 10      | THE OPPOSITION   | DETRIMENTAL POLICY    |
+| Threshold | Candidate label  | Policy label             |
+|----------:|------------------|--------------------------|
+| ≥ 44      | THE VANGUARD     | TRANSFORMATIVE LAW       |
+| ≥ 35      | THE WORKER       | PROGRESSIVE REFORM       |
+| ≥ 26      | THE PRAGMATIST   | INCREMENTAL REFORM       |
+| ≥ 16      | THE POLITICIAN   | MAINTENANCE BILL         |
+| ≥ 7       | THE BYSTANDER    | LOW ALIGNMENT POLICY     |
+| < 7       | THE MISALIGNED   | MISALIGNED POLICY        |
 
 Verdict colors come from CSS variables (`--green`, `--gold`, `--blue`, `--orange`, `--red`).
 
@@ -156,10 +161,12 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 ```js
 {
   historicalBackground: string,        // 2–3 substantive paragraphs
+  subjectPathway: 'elected' | 'community',  // auto-detected; drives UI pathway badge
   supporters: string[],
   opponents: string[],
+  funders: string[],                   // PACs, industry donors, dark money, major individual contributors
   root:     [{met: bool, reasoning: string}, ... 5 items],
-  branches: [{met: bool, reasoning: string}, ... 5 items],
+  branches: [{met: bool, reasoning: string}, ... 6 items],  // 6th = Education Reform
   fruit:    [{score: 0..3, reasoning: string}, ... 5 items],
   visibility: { score: 0..10, reasoning: string },
   toxic:    [{present: bool, reasoning: string}, ... 3 items],
@@ -235,18 +242,24 @@ anthropic.messages.stream({
 
 ## Locked Prompt — DO NOT CASUALLY MODIFY
 
-`buildAuditPrompt(target, isCandidate, isCommunity)` in [frontend/public/index.html](frontend/public/index.html) (≈ line 1328) is the **confirmed working baseline** as of the session where Billion Godson was accurately evaluated. It is wrapped in a banner comment that reads:
+`buildAuditPrompt(target, isCandidate, isCommunity)` in [frontend/public/index.html](frontend/public/index.html) is the locked prompt.
 
-> Any change to this function MUST be:
-> 1. Explicitly agreed upon before editing
-> 2. Tested against Billion Godson immediately after
-> 3. Rolled back if the result regresses
->
-> Do NOT modify this function as a side effect of other changes.
+**Current baseline (as of the 57-pt scoring rewrite):**
+- 6 Branches criteria (the 6th is "Education Reform (Black Communities)")
+- Returns `subjectPathway` (`elected` | `community`) for auto-detected pathway
+- Returns `funders` array alongside `supporters` / `opponents`
+- All other fields and discipline preserved from the prior baseline.
 
-**Treat this as a hard constraint.** If a refactor happens to touch the function, restore it exactly. If the user asks for a prompt change, confirm explicitly, propose the diff, then plan to regression-test against Billion Godson before merging.
+**⚠️ Pending regression test:** the prior locked baseline (5-branch / 60-pt) was the version verified against Billion Godson. This new 6-branch baseline has NOT yet been regression-tested. Anyone shipping this needs to run Billion Godson through it and confirm the verdict is still accurate before this is treated as the new locked baseline.
 
-The short system message at the call site (line ≈ 1453) — the one that reminds Claude to return only valid JSON, never truncate `historicalBackground`, weight community-leader records equally, and use web_search to verify — is part of the same baseline. Same rules apply.
+Going forward, any change to this function MUST be:
+1. Explicitly agreed upon before editing
+2. Tested against Billion Godson immediately after
+3. Rolled back if the result regresses
+
+Do NOT modify this function as a side effect of other changes. **Treat this as a hard constraint.** If a refactor happens to touch the function, restore it exactly. If the user asks for a prompt change, confirm explicitly, propose the diff, then plan to regression-test against Billion Godson before merging.
+
+The short system message passed to `/api/analyze` (in `autoAnalyze`) — the one that reminds Claude to return only valid JSON, never truncate `historicalBackground`, weight community-leader records equally, and use web_search to verify — is part of the same baseline. Same rules apply.
 
 ---
 
@@ -378,7 +391,7 @@ The backend's analyze handler is the only place that talks to Anthropic. Modify 
 - **Do not** commit any file containing the Anthropic API key, service account JSON, or other secrets.
 - **Do not** weaken Firestore ownership checks (`/api/audits/:userId/:auditId` must reject when the doc's `userId` doesn't match the path).
 - **Do not** treat `/api/share/:token` tokens as a security boundary — they are casual share URLs only. If something stronger is needed, switch to `crypto.randomBytes`.
-- **Do not** alter the verdict thresholds, section maxima, or 60-point total without updating the verdict labels, share-card layout, and methodology copy together.
+- **Do not** alter the verdict thresholds, section maxima, or 57-point total without updating the verdict labels, share-card layout, and methodology copy together.
 - **Do not** introduce session affinity, in-memory caching, or sticky sessions on Cloud Run — both services are stateless.
 - **Do not** remove the cache-control wrapping around the system prompt in `/api/analyze`. It is a no-op below the threshold and a free win above it.
 - **Do not** remove `localStorage` use from the frontend. It powers the per-browser user ID and the offline-fallback save path — both are intentional. (CivicSorter's no-localStorage rule does **not** apply here.)
