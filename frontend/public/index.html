@@ -169,7 +169,7 @@
   .input-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 200px; }
   .input-group label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
 
-  input[type=text], select {
+  input[type=text], input[type=email], input[type=tel], input[type=password], input[type=date], select {
     background: var(--black);
     border: 1px solid var(--border);
     color: var(--text); padding: 10px 14px;
@@ -177,10 +177,10 @@
     font-size: 14px; width: 100%;
     transition: border-color 0.2s;
   }
-  input[type=text]:focus, select:focus {
+  input[type=text]:focus, input[type=email]:focus, input[type=tel]:focus, input[type=password]:focus, input[type=date]:focus, select:focus {
     outline: none; border-color: var(--gold);
   }
-  input[type=text]::placeholder { color: var(--text-dimmer); }
+  input[type=text]::placeholder, input[type=email]::placeholder, input[type=tel]::placeholder, input[type=password]::placeholder { color: var(--text-dimmer); }
 
   /* ─── CHECKBOXES ─── */
   .check-row {
@@ -652,9 +652,339 @@
   .verdict-col-divider { width: 1px; background: var(--border); align-self: stretch; }
   #adjustedVerdictTitle, #adjustedScore { transition: color 0.4s; }
   #finalScore .score-max, #adjustedScore .score-max { color: var(--text-dimmer); }
+
+  /* ─── EVENT TOGGLE SWITCH (splash registration) ─── */
+  .toggle-switch { position:relative; width:52px; height:28px; flex-shrink:0; }
+  .toggle-switch input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; inset:0; background:var(--border); border-radius:28px; cursor:pointer; transition:0.3s; }
+  .toggle-slider:before { position:absolute; content:""; height:20px; width:20px; left:4px; bottom:4px; background:white; border-radius:50%; transition:0.3s; }
+  input:checked + .toggle-slider { background:var(--purple); }
+  input:checked + .toggle-slider:before { transform:translateX(24px); }
+
+  /* ─── SPLASH OVERLAY ─── */
+  .splash-overlay {
+    position: fixed; inset: 0; z-index: 2000;
+    background: var(--black);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .splash-overlay.hidden { display: none; }
+  .splash-header {
+    background: var(--navy);
+    border-bottom: 1px solid rgba(139,105,20,0.3);
+    padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .splash-logo { font-family:'Bebas Neue',sans-serif; font-size:26px; letter-spacing:0.08em; color:#FFFFFF; }
+  .splash-logo span { color: var(--gold-bright); }
+  .splash-step-indicator {
+    font-family:'DM Mono',monospace; font-size:11px;
+    color:rgba(255,255,255,0.45); text-transform:uppercase; letter-spacing:0.15em;
+  }
+  .splash-body {
+    flex: 1; overflow-y: auto; padding: 32px 24px;
+    max-width: 720px; margin: 0 auto; width: 100%;
+  }
+  .splash-step { display: none; }
+  .splash-step.active { display: block; }
+  .splash-title {
+    font-family:'Bebas Neue',sans-serif; font-size:38px;
+    letter-spacing:0.06em; margin-bottom:6px; line-height:1.1;
+    color: var(--text);
+  }
+  .splash-subtitle {
+    font-size:13px; color:var(--text-dim); margin-bottom:28px;
+    text-transform:uppercase; letter-spacing:0.12em;
+    font-family:'DM Mono',monospace;
+  }
+  .disclaimer-block {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; padding:24px 28px; margin-bottom:20px;
+  }
+  .disclaimer-block-title {
+    font-family:'Bebas Neue',sans-serif; font-size:18px;
+    letter-spacing:0.05em; color:var(--gold); margin-bottom:10px;
+  }
+  .disclaimer-block p {
+    font-size:13px; color:var(--text-dim); line-height:1.8;
+    margin-bottom:10px;
+  }
+  .disclaimer-block p:last-child { margin-bottom:0; }
+  .disclaimer-block strong { color:var(--text); }
+  .verdict-ref-row {
+    display:flex; align-items:center; gap:12px;
+    padding:8px 0; border-bottom:1px solid var(--border);
+    font-size:12px;
+  }
+  .verdict-ref-row:last-child { border-bottom:none; }
+  .verdict-ref-badge {
+    font-family:'Bebas Neue',sans-serif; font-size:14px;
+    letter-spacing:0.04em; min-width:140px; flex-shrink:0;
+  }
+  .verdict-ref-range {
+    font-family:'DM Mono',monospace; font-size:10px;
+    color:var(--text-dimmer); min-width:60px;
+  }
+  .verdict-ref-desc { font-size:11px; color:var(--text-dim); line-height:1.5; }
+  .pledge-box {
+    background:var(--gold-dim); border:1px solid rgba(139,105,20,0.3);
+    border-radius:10px; padding:16px 20px; margin-bottom:24px;
+    font-size:13px; color:var(--text-dim); line-height:1.7;
+  }
+  .pledge-box strong { color:var(--gold); }
+  .splash-agree-row {
+    display:flex; align-items:center; gap:12px;
+    margin-bottom:20px; cursor:pointer;
+    padding:14px 18px; background:var(--surface);
+    border:1px solid var(--border); border-radius:10px;
+    transition:all 0.2s;
+  }
+  .splash-agree-row:hover { border-color:var(--gold); background:var(--surface2); }
+  .splash-agree-row.checked { border-color:var(--gold); background:var(--gold-dim); }
+  .splash-agree-text { font-size:13px; font-weight:600; color:var(--text); }
+  .btn-splash-next {
+    width:100%; padding:14px; border-radius:10px; border:none;
+    background:var(--navy); color:#FFFFFF; font-family:'DM Mono',monospace;
+    font-size:13px; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.1em; cursor:pointer; transition:all 0.2s;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    margin-bottom:40px;
+  }
+  .btn-splash-next:hover { background:var(--gold); color:#fff; }
+  .btn-splash-next:disabled { opacity:0.4; cursor:not-allowed; }
+  /* Registration form */
+  .reg-section-title {
+    font-family:'DM Mono',monospace; font-size:10px;
+    text-transform:uppercase; letter-spacing:0.18em;
+    color:var(--text-dimmer); margin-bottom:12px; margin-top:24px;
+  }
+  .reg-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media(max-width:560px){ .reg-grid { grid-template-columns:1fr; } }
+  .reg-field { display:flex; flex-direction:column; gap:6px; }
+  .reg-field label { font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.1em; }
+  .reg-field label span { color:var(--red); margin-left:2px; }
+  .event-section {
+    background:var(--surface2); border:1px solid var(--border);
+    border-radius:10px; padding:16px; margin-top:4px; display:none;
+  }
+  .event-section.visible { display:block; }
+  .event-toggle-row {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-top:16px; margin-bottom:4px;
+    padding:12px 16px; background:var(--surface);
+    border:1px solid var(--border); border-radius:10px; cursor:pointer;
+    transition:all 0.2s;
+  }
+  .event-toggle-row:hover { border-color:var(--gold); }
+  .event-toggle-label { font-size:13px; font-weight:600; color:var(--text); }
+  .event-toggle-sub { font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .reg-error { color:var(--red); font-size:12px; margin-top:8px; display:none; }
+  .splash-privacy {
+    font-size:11px; color:var(--text-dimmer); text-align:center;
+    line-height:1.6; margin-top:12px; margin-bottom:40px;
+  }
 </style>
 </head>
 <body>
+
+<!-- ══════════ SPLASH OVERLAY — DISCLAIMER & REGISTRATION ══════════ -->
+<div id="splashOverlay" class="splash-overlay">
+
+  <div class="splash-header">
+    <div class="splash-logo">Root <span>&</span> Fruit <span style="font-size:13px;color:var(--text-dimmer);font-family:'DM Sans',sans-serif;font-weight:400;letter-spacing:0.05em;"> Integrity Index</span></div>
+    <div class="splash-step-indicator" id="splashStepLabel">Step 1 of 4</div>
+  </div>
+
+  <div class="splash-body" id="splashBody">
+
+    <!-- ── ONBOARDING CARD: 4 steps centered in overlay ── -->
+    <div id="splashOnboardWrap" style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 64px);padding:24px 0;">
+      <div class="modal" style="max-width:560px;width:100%;">
+        <div class="modal-body">
+
+          <!-- Step 1: Community Covenant -->
+          <div class="onboard-step active" id="splashStep1">
+            <span class="onboard-icon">🤝</span>
+            <div class="onboard-title">Before You Begin</div>
+            <div class="onboard-body">
+              <strong style="color:var(--text);">This tool is for engagement. Not weaponization. Not partisan point-scoring.</strong><br><br>
+              Root & Fruit was built to help communities ask harder questions about the people seeking their vote and trust. Use these scores to start real conversations. Not to attack people. Not to settle scores.
+            </div>
+            <div style="background:rgba(184,137,42,0.08);border:1px solid rgba(184,137,42,0.2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-dim);line-height:1.6;margin-bottom:20px;text-align:left;">
+              Rooted in 240 years of Black civic tradition. From the Free African Society of 1787 to the AME Church to the streets. Built for voters who need more than a party line.
+            </div>
+            <div class="onboard-dots">
+              <div class="onboard-dot active"></div><div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot"></div>
+            </div>
+            <div class="onboard-nav">
+              <button class="btn-onboard-next" onclick="splashNext()" style="width:100%;">Get Started →</button>
+            </div>
+          </div>
+
+          <!-- Step 2: The Framework -->
+          <div class="onboard-step" id="splashStep1b">
+            <div class="onboard-title" style="margin-bottom:16px;">How It Works</div>
+            <div class="onboard-pillars">
+              <div class="onboard-pillar">
+                <div class="onboard-pillar-icon">🌱</div>
+                <div class="onboard-pillar-name" style="color:var(--gold);">The Root (25 pts)</div>
+                <div class="onboard-pillar-desc">What do they actually believe? Their values on record, not their talking points.</div>
+              </div>
+              <div class="onboard-pillar">
+                <div class="onboard-pillar-icon">📣</div>
+                <div class="onboard-pillar-name" style="color:var(--blue);">The Branches (12 pts)</div>
+                <div class="onboard-pillar-desc">Did they fight for it, even when they had no power to win? Advocacy counts.</div>
+              </div>
+              <div class="onboard-pillar">
+                <div class="onboard-pillar-icon">🍎</div>
+                <div class="onboard-pillar-name" style="color:var(--green);">The Fruit (15 pts)</div>
+                <div class="onboard-pillar-desc">What actually changed? Real outcomes. Not promises. Scored 0 to 3.</div>
+              </div>
+              <div class="onboard-pillar">
+                <div class="onboard-pillar-icon">☀️</div>
+                <div class="onboard-pillar-name" style="color:var(--orange);">The Light (10 pts)</div>
+                <div class="onboard-pillar-desc">Is there a public record to judge? Organizing history counts as much as voting records.</div>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--text-dim);text-align:center;margin-bottom:16px;line-height:1.8;">
+              <strong style="color:var(--text);">Toxic Soil</strong> deducts points for documented betrayal &nbsp;·&nbsp;
+              <strong style="color:var(--text);">People's Choice</strong> is a community-awarded +5 &nbsp;·&nbsp;
+              <strong style="color:var(--text);">Electability Rating</strong> is a separate polling indicator
+            </div>
+            <div class="onboard-dots">
+              <div class="onboard-dot"></div><div class="onboard-dot active"></div><div class="onboard-dot"></div><div class="onboard-dot"></div>
+            </div>
+            <div class="onboard-nav">
+              <button class="btn-onboard-skip" onclick="splashPrev()">← Back</button>
+              <button class="btn-onboard-next" onclick="splashNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 3: Verdict Classifications -->
+          <div class="onboard-step" id="splashStep1c">
+            <span class="onboard-icon">⚖️</span>
+            <div class="onboard-title">The Verdicts</div>
+            <div class="onboard-body" style="text-align:left;margin-bottom:16px;">
+              <div style="display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:var(--green);font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Vanguard</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">44–57</span><span style="font-size:11px;color:var(--text-dim);">Rare. An actual record of structural change.</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:#6eddb5;font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Worker</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">35–43</span><span style="font-size:11px;color:var(--text-dim);">Shows up. Gets things done. Earns trust.</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:var(--blue);font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Pragmatist</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">26–34</span><span style="font-size:11px;color:var(--text-dim);">Some wins. Some missed shots. Context matters.</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:var(--gold);font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Politician</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">16–25</span><span style="font-size:11px;color:var(--text-dim);">Talks the right game. The record tells another story.</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:var(--orange);font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Bystander</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">7–15</span><span style="font-size:11px;color:var(--text-dim);">Present but not engaged. Not harmful, just absent.</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface2);border-radius:8px;"><span style="color:var(--red);font-family:'Bebas Neue',sans-serif;font-size:14px;min-width:116px;">The Misaligned</span><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dimmer);min-width:54px;">0–6</span><span style="font-size:11px;color:var(--text-dim);">The record does not align with these values. Full stop.</span></div>
+              </div>
+            </div>
+            <div class="onboard-dots">
+              <div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot active"></div><div class="onboard-dot"></div>
+            </div>
+            <div class="onboard-nav">
+              <button class="btn-onboard-skip" onclick="splashPrev()">← Back</button>
+              <button class="btn-onboard-next" onclick="splashNext()">Next →</button>
+            </div>
+          </div>
+
+          <!-- Step 4: Values + Agreement -->
+          <div class="onboard-step" id="splashStep1d">
+            <span class="onboard-icon">🗳️</span>
+            <div class="onboard-title">One Last Thing</div>
+            <div class="onboard-body">
+              This tool measures alignment with a specific set of community values. It is not a political party. It is not an endorsement of any candidate.<br><br>
+              A high score means the record lines up with these values. A low score means it does not. Neither tells the whole story of who someone is.<br><br>
+              Read the evidence. Talk to your community. Make your own call.
+            </div>
+            <label class="splash-agree-row" id="agreeRow" onclick="toggleAgree()" style="margin-bottom:16px;text-align:left;">
+              <input type="checkbox" id="agreeCB" class="custom-cb gold-cb" style="width:18px;height:18px;pointer-events:none;">
+              <div class="splash-agree-text">I have read and understand the purpose, methodology, and community covenant of Root & Fruit.</div>
+            </label>
+            <div class="onboard-dots">
+              <div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot"></div><div class="onboard-dot active"></div>
+            </div>
+            <div class="onboard-nav">
+              <button class="btn-onboard-skip" onclick="splashPrev()">← Back</button>
+              <button class="btn-onboard-next" id="btnStep1Next" onclick="goToRegistration()" disabled>Continue to Registration →</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ── STEP 2: REGISTRATION ── -->
+    <div id="splashStep2" style="display:none;">
+      <div class="splash-title">Register to Access</div>
+      <div class="splash-subtitle">Help us understand who is using this tool</div>
+
+      <div class="disclaimer-block" style="margin-bottom:20px;">
+        <p style="margin:0;">Your information helps the Root & Fruit team understand how this tool is being used across communities, organizations, and events. <strong>Your data is never sold or shared with third parties.</strong></p>
+      </div>
+
+      <div class="reg-section-title">Personal Information</div>
+      <div class="reg-grid">
+        <div class="reg-field">
+          <label>Full Name <span>*</span></label>
+          <input type="text" id="regName" placeholder="Your full name">
+        </div>
+        <div class="reg-field">
+          <label>Email Address <span>*</span></label>
+          <input type="email" id="regEmail" placeholder="your@email.com">
+        </div>
+        <div class="reg-field">
+          <label>Contact Number</label>
+          <input type="tel" id="regPhone" placeholder="(000) 000-0000">
+        </div>
+        <div class="reg-field">
+          <label>Organization / Affiliation</label>
+          <input type="text" id="regOrg" placeholder="Church, coalition, campaign...">
+        </div>
+      </div>
+
+      <div class="event-toggle-row" onclick="toggleEventSection()">
+        <div>
+          <div class="event-toggle-label">Using this for an event?</div>
+          <div class="event-toggle-sub">Add event details so we can track community engagement</div>
+        </div>
+        <label class="toggle-switch" onclick="event.stopPropagation();">
+          <input type="checkbox" id="eventToggleCB" onchange="toggleEventSection()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="event-section" id="eventSection">
+        <div class="reg-section-title" style="margin-top:0;">Event Details</div>
+        <div class="reg-grid">
+          <div class="reg-field" style="grid-column:1/-1;">
+            <label>Event Name</label>
+            <input type="text" id="regEventName" placeholder="e.g. Voter Empowerment Summit">
+          </div>
+          <div class="reg-field">
+            <label>Geographic Location</label>
+            <input type="text" id="regEventLocation" placeholder="City, State">
+          </div>
+          <div class="reg-field">
+            <label>Date of Event</label>
+            <input type="date" id="regEventDate">
+          </div>
+        </div>
+      </div>
+
+      <div class="reg-error" id="regError">Please enter your full name and a valid email address to continue.</div>
+
+      <div style="margin-top:24px;">
+        <button class="btn-splash-next" onclick="submitRegistration()">
+          <i class="fa-solid fa-unlock"></i> Access Root & Fruit
+        </button>
+      </div>
+
+      <div class="splash-privacy">
+        By continuing, you agree to engage with this tool in accordance with the Community Covenant.<br>
+        Your information will be sent to the Root & Fruit team for research and outreach purposes only.
+      </div>
+
+    </div>
+
+  </div>
+</div>
 
 <!-- ══════════ ONBOARDING MODAL ══════════ -->
 <div class="modal-overlay hidden" id="onboardModal">
@@ -2665,6 +2995,151 @@ visSlider.addEventListener('input', calculate);
 toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getElementById('tx'+i).classList.toggle('active', c.checked); calculate(); }));
 
 // ══════════════════════════════════════════════
+//  SPLASH OVERLAY — DISCLAIMER & REGISTRATION
+// ══════════════════════════════════════════════
+//  Set the address that registration notifications are sent to:
+const REGISTRATION_EMAIL = 'rootandfruit@wetheanvil.org';
+
+const AUTO_REPLY_SUBJECT = "Welcome to Root & Fruit: You're Part of Something Bigger";
+
+function buildAutoReplyBody(firstName) {
+  return `Dear ${firstName},
+
+Welcome to the Root & Fruit Integrity Index. You just joined something that matters. Root & Fruit was built on a simple conviction: by their fruits, shall you know them. Not their rhetoric. Their record.
+
+You're now connected to a tool rooted in 240 years of Free African civic tradition, from the Free African Society of 1787 straight to you and every community member who ever had to size up a candidate or policy with nothing but a voter guide and their own good sense. We built Root & Fruit to sharpen that judgment, and foster more informed community conversation.
+
+Root & Fruit, its scoring framework, the audit reports, the community assessment: all of it was designed to bring information right to the hands of the people and we need your support to keep it going, growing and accessible without compromise. If you believe this kind of tool should exist, please consider making a donation of your choosing to help us to continue building tools that meet the needs of our community.
+
+SUPPORT THE ANVIL INSTITUTE: [INSERT DONATION LINK]
+
+The Anvil Institute is a 501(c)(3) nonprofit charitable organization. Your donation is tax-deductible to the extent permitted by law.
+
+Your support keeps this work in the hands of the people, not the politicians.
+
+Thank you for your support and dedication. Now go out and make the change you want to see!
+
+In solidarity,
+
+Kirkpatrick (Kp) Tyler
+Executive Director
+The Anvil Institute · 501(c)(3) Nonprofit Charitable Organization
+
+© 2026 Cast Your Net Media and Technologies · The Anvil Institute · Free African Alliance
+rootandfruit.app`;
+}
+
+function initSplash() {
+  const registered = sessionStorage.getItem('rfRegistered');
+  if (registered) {
+    document.getElementById('splashOverlay').classList.add('hidden');
+  }
+}
+
+function toggleAgree() {
+  const cb = document.getElementById('agreeCB');
+  const row = document.getElementById('agreeRow');
+  const btn = document.getElementById('btnStep1Next');
+  cb.checked = !cb.checked;
+  row.classList.toggle('checked', cb.checked);
+  btn.disabled = !cb.checked;
+}
+
+let splashStep = 0;
+const SPLASH_STEPS = ['splashStep1','splashStep1b','splashStep1c','splashStep1d'];
+
+function splashNext() {
+  document.getElementById(SPLASH_STEPS[splashStep]).classList.remove('active');
+  splashStep = Math.min(splashStep + 1, SPLASH_STEPS.length - 1);
+  document.getElementById(SPLASH_STEPS[splashStep]).classList.add('active');
+  document.getElementById('splashStepLabel').textContent = `Step ${splashStep + 1} of ${SPLASH_STEPS.length} — Before You Begin`;
+}
+
+function splashPrev() {
+  document.getElementById(SPLASH_STEPS[splashStep]).classList.remove('active');
+  splashStep = Math.max(splashStep - 1, 0);
+  document.getElementById(SPLASH_STEPS[splashStep]).classList.add('active');
+  document.getElementById('splashStepLabel').textContent = `Step ${splashStep + 1} of ${SPLASH_STEPS.length} — Before You Begin`;
+}
+
+function goToRegistration() {
+  // Hide the onboarding card, show registration
+  document.getElementById('splashOnboardWrap').style.display = 'none';
+  document.getElementById('splashStep2').style.display = 'block';
+  document.getElementById('splashStepLabel').textContent = 'Registration';
+  document.querySelector('.splash-body').scrollTop = 0;
+}
+
+function toggleEventSection() {
+  const cb = document.getElementById('eventToggleCB');
+  const section = document.getElementById('eventSection');
+  section.classList.toggle('visible', cb.checked);
+}
+
+function submitRegistration() {
+  const name = document.getElementById('regName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const errEl = document.getElementById('regError');
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!name || !emailValid) { errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+
+  const phone = document.getElementById('regPhone').value.trim();
+  const org = document.getElementById('regOrg').value.trim();
+  const isEvent = document.getElementById('eventToggleCB').checked;
+  const eventName = document.getElementById('regEventName').value.trim();
+  const eventLocation = document.getElementById('regEventLocation').value.trim();
+  const eventDate = document.getElementById('regEventDate').value;
+  const timestamp = new Date().toLocaleString();
+
+  // Store in sessionStorage
+  sessionStorage.setItem('rfRegistered', 'true');
+  sessionStorage.setItem('rfUserData', JSON.stringify({ name, email, phone, org, isEvent, eventName, eventLocation, eventDate, timestamp }));
+
+  // Build email body
+  let body = `ROOT & FRUIT — NEW USER REGISTRATION\n`;
+  body += `─────────────────────────────────────\n`;
+  body += `Timestamp   : ${timestamp}\n`;
+  body += `Name        : ${name}\n`;
+  body += `Email       : ${email}\n`;
+  if (phone) body += `Phone       : ${phone}\n`;
+  if (org)   body += `Organization: ${org}\n`;
+  if (isEvent) {
+    body += `\nEVENT DETAILS\n─────────────────────────────────────\n`;
+    if (eventName)     body += `Event Name  : ${eventName}\n`;
+    if (eventLocation) body += `Location    : ${eventLocation}\n`;
+    if (eventDate)     body += `Date        : ${eventDate}\n`;
+  }
+  body += `\n─────────────────────────────────────\nRoot & Fruit Integrity Index`;
+
+  const subject = `Root & Fruit Registration — ${name}${org ? ' (' + org + ')' : ''}`;
+  window.location.href = `mailto:${REGISTRATION_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  // Auto-reply to registrant via FormSubmit.co (no backend required)
+  if (email) {
+    const firstName = name.split(' ')[0] || name;
+    fetch('https://formsubmit.co/ajax/' + REGISTRATION_EMAIL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        email: email,
+        organization: org || '',
+        tool: 'Root & Fruit Integrity Index',
+        _subject: subject,
+        _autoresponse: buildAutoReplyBody(firstName),
+        _replyto: email,
+        _captcha: 'false'
+      })
+    }).catch(() => { /* silent fail — registration still completes */ });
+  }
+
+  setTimeout(() => {
+    document.getElementById('splashOverlay').classList.add('hidden');
+  }, 600);
+}
+
+// ══════════════════════════════════════════════
 //  ONBOARDING
 // ══════════════════════════════════════════════
 let obStep = 0;
@@ -2823,14 +3298,12 @@ function showView(v) {
 }
 
 // ══════════════════════════════════════════════
-//  UPDATED INIT — show onboarding for first-timers
+//  UPDATED INIT — splash gates first-run onboarding + registration
 // ══════════════════════════════════════════════
 renderSavedList();
 loadFromURL();
 calculate();
-if (!localStorage.getItem('rfOnboarded')) {
-  setTimeout(showOnboarding, 600);
-}
+initSplash();
 </script>
 </body>
 </html>
