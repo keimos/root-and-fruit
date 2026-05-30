@@ -2303,28 +2303,31 @@ async function applyAnalysis(data) {
     document.getElementById('confidenceFill').style.background = qual >= 70 ? 'var(--green)' : qual >= 40 ? 'var(--gold)' : 'var(--orange)';
   }
 
+  // Light stagger for a "fill-in" reveal — kept small so the result lands
+  // almost immediately once the (already-returned) data is applied. These are
+  // cosmetic only; the response is fully back before applyAnalysis runs.
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
   // Root
   for (let i = 0; i < 5; i++) {
-    if (data.root[i]?.met) { await delay(120); rootCBs[i].checked = true; calculate(); }
+    if (data.root[i]?.met) { await delay(30); rootCBs[i].checked = true; calculate(); }
   }
   // Branches (6 items: 5 legacy + Education Reform)
   const branchCount = branchCBs.length;
   for (let i = 0; i < branchCount; i++) {
-    if (data.branches[i]?.met) { await delay(120); branchCBs[i].checked = true; calculate(); }
+    if (data.branches[i]?.met) { await delay(30); branchCBs[i].checked = true; calculate(); }
   }
   // Fruit
   for (let i = 0; i < 5; i++) {
     const s = Math.min(3, Math.max(0, data.fruit[i]?.score || 0));
-    for (let v = 1; v <= s; v++) { await delay(60); fruitSls[i].value = v; calculate(); }
+    for (let v = 1; v <= s; v++) { await delay(15); fruitSls[i].value = v; calculate(); }
   }
   // Visibility
   const vs = Math.min(10, Math.max(0, data.visibility?.score || 0));
-  for (let v = 1; v <= vs; v++) { await delay(40); visSlider.value = v; calculate(); }
+  for (let v = 1; v <= vs; v++) { await delay(10); visSlider.value = v; calculate(); }
   // Toxic
   for (let i = 0; i < 3; i++) {
-    if (data.toxic[i]?.present) { await delay(200); toxicCBs[i].checked = true; calculate(); }
+    if (data.toxic[i]?.present) { await delay(50); toxicCBs[i].checked = true; calculate(); }
   }
 
   // Lock the AI baseline. After this point, any further edit to the form

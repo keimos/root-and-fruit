@@ -57,8 +57,14 @@ app.post('/api/analyze', async (req, res) => {
       system: systemBlocks,
       messages,
       thinking: { type: 'adaptive' },
+      // Low effort trims thinking depth/tokens — this is a structured
+      // extract-and-verify task, not frontier reasoning. (effort errors on
+      // Haiku 4.5; only set it on Opus/Sonnet tiers.)
+      ...(/haiku/i.test(MODEL) ? {} : { output_config: { effort: 'low' } }),
+      // Fewer search rounds = less sequential wall-clock. Each round is a
+      // network fetch + model re-reason; 2 covers verification without the tail.
       tools: [
-        { type: 'web_search_20260209', name: 'web_search', max_uses: 5 }
+        { type: 'web_search_20260209', name: 'web_search', max_uses: 2 }
       ]
     });
 
