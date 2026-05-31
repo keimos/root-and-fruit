@@ -331,4 +331,11 @@ app.get('/api/share/:token', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+// Only start listening when run directly (`node server.js`). When required by
+// the test suite, the app is exported instead so tests can mount it on an
+// ephemeral port without booting the production listener.
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+}
+
+module.exports = app;

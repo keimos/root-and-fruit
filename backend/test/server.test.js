@@ -1,0 +1,109 @@
+/**
+ * Backend integration tests — node:test (built-in, no external deps).
+ *
+ * Strategy: mount the real Express app on an ephemeral port and drive it over
+ * HTTP with the global `fetch`. We deliberately exercise only the paths that
+ * resolve BEFORE any Firestore query or Anthropic call:
+ *   - routing + CORS wiring
+ *   - request-body validation (the 400s)
+ *   - the no-API-key guard on /api/analyze and /api/search (500s)
+ *   - 404 on unknown routes
+ *
+ * The suite runs with no ANTHROPIC_API_KEY set, so `anthropic` is null and the
+ * AI proxies short-circuit to 500 without ever reaching the network. Firestore's
+ * client is lazy, so importing the app never opens a connection. Anything that
+ * would hit Firestore (a valid save/list/delete/share) is intentionally NOT
+ * tested here — that needs an emulator or mocks, which this dependency-free
+ * suite avoids by design.
+ */
+
+const { test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+
+// Ensure the AI proxies take their no-key branch regardless of the dev's shell.
+delete process.env.ANTHROPIC_API_KEY;
+
+const app = require('../server');
+
+let server;
+let base;
+
+before(async () => {
+  await new Promise((resolve) => {
+    server = app.listen(0, () => {
+      const { port } = server.address();
+      base = `http://127.0.0.1:${port}`;
+      resolve();
+    });
+  });
+});
+
+after(async () => {
+  await new Promise((resolve) => server.close(resolve));
+});
+
+const json = (body) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body)
+});
+
+test('GET /health returns ok with a timestamp', async () => {
+  const res = await fetch(`${base}/health`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, 'ok');
+  assert.equal(typeof body.ts, 'number');
+});
+
+test('CORS allows cross-origin by default (Access-Control-Allow-Origin: *)', async () => {
+  const res = await fetch(`${base}/health`, { headers: { Origin: 'https://example.com' } });
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+});
+
+test('unknown route 404s', async () => {
+  const res = await fetch(`${base}/api/does-not-exist`);
+  assert.equal(res.status, 404);
+});
+
+test('POST /api/analyze without an API key returns 500', async () => {
+  // anthropic is null in the test env, so the handler short-circuits before
+  // validating the body or touching the network.
+  const res = await fetch(`${base}/api/analyze`, json({ messages: [{ role: 'user', content: 'hi' }] }));
+  assert.equal(res.status, 500);
+  assert.equal((await res.json()).error, 'API key not configured');
+});
+
+test('POST /api/search without an API key returns 500', async () => {
+  const res = await fetch(`${base}/api/search`, json({ messages: [{ role: 'user', content: 'hi' }] }));
+  assert.equal(res.status, 500);
+  assert.equal((await res.json()).error, 'API key not configured');
+});
+
+test('POST /api/register rejects a missing name', async () => {
+  const res = await fetch(`${base}/api/register`, json({ email: 'someone@example.com' }));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /name and email/i);
+});
+
+test('POST /api/register rejects a malformed email', async () => {
+  const res = await fetch(`${base}/api/register`, json({ name: 'Ada', email: 'not-an-email' }));
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/audits rejects a missing userId', async () => {
+  const res = await fetch(`${base}/api/audits`, json({ audit: { total: 42 } }));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /userId and audit/i);
+});
+
+test('POST /api/audits rejects a missing audit', async () => {
+  const res = await fetch(`${base}/api/audits`, json({ userId: 'u-1' }));
+  assert.equal(res.status, 400);
+});
+
+test('POST /api/share rejects a missing audit', async () => {
+  const res = await fetch(`${base}/api/share`, json({}));
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /audit required/i);
+});
