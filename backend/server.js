@@ -87,6 +87,35 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+// ── Auxiliary web-search lookups (Legislative Scrubber, Electability) ──
+// Lighter-weight sibling of /api/analyze: no adaptive thinking (these are
+// structured extract-from-search tasks, not reasoning), smaller token budget,
+// caller supplies its own system prompt + messages. Keeps the API key
+// server-side — the frontend never talks to api.anthropic.com directly.
+app.post('/api/search', async (req, res) => {
+  if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
+
+  const { messages, system, max_tokens = 3000, max_uses = 4 } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'messages required' });
+
+  try {
+    const message = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens,
+      system,
+      messages,
+      tools: [
+        { type: 'web_search_20260209', name: 'web_search', max_uses }
+      ]
+    });
+    res.json(message);
+  } catch (err) {
+    console.error('Search error:', err);
+    const status = err?.status || 500;
+    res.status(status).json({ error: err.message || 'Search failed' });
+  }
+});
+
 // ── Save audit ─────────────────────────────────────────
 app.post('/api/audits', async (req, res) => {
   const { userId, audit } = req.body;

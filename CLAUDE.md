@@ -27,7 +27,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 ```
 root-and-fruit/
 ├── backend/
-│   ├── server.js         ← Express API: /api/analyze, /api/audits, /api/share, /health
+│   ├── server.js         ← Express API: /api/analyze, /api/search, /api/audits, /api/share, /health
 │   ├── Dockerfile
 │   └── package.json
 ├── frontend/
@@ -61,6 +61,7 @@ Cloud Run: root-and-fruit-frontend (Node 20, port 8080)
 Cloud Run: root-and-fruit-backend (Node 20, port 8080)
    ├── GET  /health
    ├── POST /api/analyze              → Anthropic Messages API (adaptive thinking + web_search)
+   ├── POST /api/search               → Anthropic Messages API (web_search, no thinking) — Scrubber + Electability
    ├── POST /api/audits               → Firestore: audits.add({userId, ...audit})
    ├── GET  /api/audits/:userId       → Firestore: audits.where(userId).orderBy(createdAt desc)
    ├── DELETE /api/audits/:userId/:id → Firestore: audits.delete (with userId ownership check)
@@ -97,27 +98,30 @@ The frontend reads its backend URL from `window.__RF_CONFIG__.backendUrl`, which
 
 ### View model
 
-Six views are rendered as sibling `<div class="view">` elements; `showView(v)` toggles the `.active` class. The current view is also reflected in the top nav tabs.
+Six views are rendered as sibling `<div class="view">` elements; `showView(v)` toggles the `.active` class. The current view is also reflected in the top nav tabs. **Nav order (left→right): Results · Community Assessment · Full Report · Compare · Saved Audits · About.** `results` is the **default active view** on load. Note the tab **labels** differ from their internal slugs: `assess` is labelled **"Full Report"** and `methodology` is labelled **"About"**.
 
-| View              | Purpose                                                          |
-|-------------------|------------------------------------------------------------------|
-| `assess`          | Subject input + Auto-Analyze + AI audit report. Links to Community Assessment for scoring. |
-| `community`       | The 6 scoring cards (Root, Branches, Fruit, Light, Toxic) + People's Choice + per-section justification textareas + baseline-vs-adjusted indicator. This is where the scoring inputs live. |
-| `results`         | Verdict, score breakdown, radar chart, share-card preview       |
-| `compare`         | Side-by-side comparison of two saved audits                     |
-| `saved`           | List of saved audits (cloud-first, local fallback)              |
-| `methodology`     | Static educational content explaining the framework             |
+| View (slug)       | Tab label    | Purpose                                                          |
+|-------------------|--------------|------------------------------------------------------------------|
+| `results`         | Results      | **Entry point.** Subject input + candidate/policy toggle + manual pathway toggle + Auto-Analyze + Evidence-Quality bar, then verdict, score breakdown, radar chart, **Electability Rating** (separate indicator, backend-routed; candidates only), and share-card preview. |
+| `community`       | Community Assessment | The 6 scoring cards (Root, Branches, Fruit, Light, Toxic) + People's Choice + per-section justification textareas + baseline-vs-adjusted indicator. This is where the scoring inputs live. |
+| `assess`          | Full Report  | **Read-only** rendered audit. Report-header share-card image + subject metadata strip, an empty state until an analysis exists, the AI report (`#auditContent`, "Official Audit Report"), and the opt-in **Legislative Scrubber** (backend-routed). No subject input lives here anymore. |
+| `compare`         | Compare      | Side-by-side comparison of two saved audits                     |
+| `saved`           | Saved Audits | List of saved audits (cloud-first, local fallback)              |
+| `methodology`     | About        | Static educational content explaining the framework             |
 
 `showView('community')` triggers `updateCommunityScoreIndicator()`.
 `showView('results')` triggers `updateResultsView()` and `drawShareCard()` (after a 100ms tick).
+`showView('assess')` triggers `populateReportHeader()` (fills the metadata strip + captures the share-card canvas into `#reportShareImg`).
 `showView('saved')` triggers `renderSavedList()`.
 `showView('compare')` triggers `populateCompareSelects()`.
 
+`autoAnalyze()` runs from the Results tab: on success it reveals the report, calls `updateResultsView()` + `drawShareCard()` + `populateReportHeader()`, and (for candidates) kicks off `runElectabilityScore()` plus `runLegislativeScrubber()` when the Scrubber opt-in is checked.
+
 **Baseline vs Adjusted:** `Auto-Analyze` fills the form, then `captureBaseline()` freezes the AI's read into `baselineScores`. Any later edit to a checkbox/slider/People's-Choice becomes the "Adjusted" community score. `calculate()` updates the Adjusted footer pair live; the Baseline pair stays frozen. `getCommunityDelta()` / `updateCommunityScoreIndicator()` drive the indicator in the Community view. `baselineScores` + justifications are persisted in the saved-audit object.
 
-> **NOTE:** `showView` is defined twice in the file (~line 1923 and ~line 3289). Both share the same `tabs` array (`['assess','community','results','compare','saved','methodology']`); the distinguishing feature of the **second/bottom** definition — the canonical one — is the deferred share-card draw (`setTimeout(drawShareCard, 100)` on `results`). The earlier one is dead code — leave it alone unless you're doing a focused cleanup PR.
+> **NOTE:** `showView` is defined twice in the file (the canonical one is the **second/bottom** definition). The **dead earlier copy still carries the old `tabs` array** (`['assess','community','results',…]`); the canonical copy holds the live order `['results','community','assess','compare','saved','methodology']` — matching the nav DOM — plus the deferred share-card draw (`setTimeout(drawShareCard, 100)` on `results`) and `populateReportHeader()` on `assess`. The `tabs` array indexes into the nav buttons by position, so it **must** mirror nav DOM order. Leave the dead copy alone unless you're doing a focused cleanup PR; if you do remove it, the canonical copy is the one to keep.
 
-> **⚠️ Divergent standalone prototype.** A single-file `root-and-fruit.html` circulates outside this repo as a browser-only fork. It is **NOT** the source of truth and must not be merged wholesale. It diverges from the canonical `frontend/public/index.html` in ways that violate this repo's hard constraints: it calls `https://api.anthropic.com` **directly from the browser** with a `sessionStorage` API key + `anthropic-dangerous-direct-browser-access` (instead of routing through `${backendUrl}/api/analyze`), and it persists audits to `localStorage` only (no `CloudAuditStore`/Firestore). It also carries UI the canonical app does not have — an API-key modal, a **Legislative Scrubber**, an **Electability Rating** card, an auto-detected **pathway badge** (vs. our manual pathway toggle), a Full-Report **share-card image header**, and a **Results-first** nav order. If asked to "sync" or port from it, port **individual features only**, re-routing every Anthropic call through the backend — never the browser-direct API pattern.
+> **⚠️ Divergent standalone prototype.** A single-file `root-and-fruit.html` circulates outside this repo as a browser-only fork. The canonical app has since **adopted its layout** — Results-first nav, read-only "Full Report" tab with a share-card image header, the Legislative Scrubber, and the Electability Rating — but **routed through the backend**, not the browser. The prototype still violates this repo's hard constraints and must **not** be merged wholesale: it calls `https://api.anthropic.com` **directly from the browser** (`sessionStorage` key + `anthropic-dangerous-direct-browser-access`) and persists to `localStorage` only (no `CloudAuditStore`/Firestore), and it uses an API-key modal + auto-detected pathway **badge** we deliberately did not adopt (we kept the manual pathway toggle). If asked to port anything else from it, re-route every Anthropic call through the backend — never the browser-direct pattern.
 
 ### Subject model
 
@@ -197,7 +201,8 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Method | Path                              | Behavior                                                  |
 |--------|-----------------------------------|-----------------------------------------------------------|
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
-| POST   | `/api/analyze`                    | Anthropic Messages proxy. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`. Streams to `finalMessage()`. Returns the full Anthropic message object. |
+| POST   | `/api/analyze`                    | Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object. |
+| POST   | `/api/search`                     | Lighter web-search proxy for the **Legislative Scrubber** and **Electability Rating**. Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
 | POST   | `/api/audits`                     | `{userId, audit}` → adds doc with `createdAt`/`updatedAt` Firestore timestamps. |
 | GET    | `/api/audits/:userId`             | Returns audits for a user, ordered by `createdAt desc`, capped at `limit` (default 50, max 100). Timestamps converted to ISO strings. |
 | DELETE | `/api/audits/:userId/:auditId`    | Verifies ownership before deleting (403 if `userId` doesn't match). |
@@ -379,7 +384,7 @@ If you add a new boolean to **Root** (or a new slider to **Fruit**, etc.), you m
 
 ### Adding a new Anthropic capability (e.g. tool, beta header)
 
-The backend's analyze handler is the only place that talks to Anthropic. Modify `anthropic.messages.stream({...})` arguments there. If you switch from `messages.stream` to `messages.create`, remove the `finalMessage()` call.
+Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stream({...})` + `finalMessage()`, adaptive thinking) and `/api/search` (`anthropic.messages.create({...})`, web_search only, no thinking — used by the Scrubber/Electability). Modify the arguments in the relevant handler. If you switch `/api/analyze` from `messages.stream` to `messages.create`, remove the `finalMessage()` call. Keep all browser → Anthropic traffic flowing through one of these proxies; never add a browser-direct call.
 
 ---
 
@@ -388,7 +393,7 @@ The backend's analyze handler is the only place that talks to Anthropic. Modify 
 - **Do not** modify `buildAuditPrompt` (the locked prompt) or the analyze-time short system message without an explicit, agreed-upon change request and a Billion Godson regression test plan.
 - **Do not** introduce a frontend bundler (Vite, webpack, esbuild, etc.) or split `frontend/public/index.html` into multiple files. The single-file constraint is intentional.
 - **Do not** add a frontend framework (React, Vue, Svelte, …). The app is vanilla JS by design.
-- **Do not** call `https://api.anthropic.com` from the browser. Always go through `${backendUrl}/api/analyze`.
+- **Do not** call `https://api.anthropic.com` from the browser. Always go through a backend proxy — `${backendUrl}/api/analyze` for the main audit, `${backendUrl}/api/search` for the Scrubber/Electability lookups.
 - **Do not** hardcode the backend URL into the frontend image — read it from `window.__RF_CONFIG__.backendUrl`. The runtime injection in `frontend/server.js` is load-bearing.
 - **Do not** commit any file containing the Anthropic API key, service account JSON, or other secrets.
 - **Do not** weaken Firestore ownership checks (`/api/audits/:userId/:auditId` must reject when the doc's `userId` doesn't match the path).

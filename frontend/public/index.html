@@ -784,6 +784,39 @@
     font-size:11px; color:var(--text-dimmer); text-align:center;
     line-height:1.6; margin-top:12px; margin-bottom:40px;
   }
+
+  /* ─── FULL REPORT: empty state + report header ─── */
+  .report-empty { text-align:center; padding:60px 20px; color:var(--text-dim); }
+  .report-empty i { font-size:40px; opacity:0.15; display:block; margin-bottom:16px; }
+  .report-empty-title { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:0.05em; color:var(--text-dimmer); margin-bottom:8px; }
+  .rpt-meta-label { font-family:'DM Mono',monospace; font-size:9px; letter-spacing:0.18em; text-transform:uppercase; color:var(--text-dimmer); margin-bottom:3px; }
+  .rpt-meta-val { font-weight:600; font-size:13px; color:var(--text); }
+
+  /* ─── LEGISLATIVE SCRUBBER ─── */
+  .scrubber-toggle { display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:14px 20px; }
+  .scrubber-toggle-label { font-family:'DM Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.15em; color:var(--purple); }
+  .scrubber-body { padding:0 20px 16px; }
+  .scrubber-criteria-block { margin-bottom:16px; }
+  .scrubber-criteria-title { font-size:11px; font-family:'DM Mono',monospace; text-transform:uppercase; letter-spacing:0.12em; color:var(--gold); margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid var(--border); }
+  .scrubber-item { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; }
+  .scrubber-item:last-child { border-bottom:none; }
+  .scrubber-item-type { font-family:'DM Mono',monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.1em; padding:2px 6px; border-radius:4px; white-space:nowrap; flex-shrink:0; height:fit-content; margin-top:2px; }
+  .scrubber-vote { background:var(--blue-dim); color:var(--blue); }
+  .scrubber-statement { background:var(--green-dim); color:var(--green); }
+  .scrubber-bill { background:var(--gold-dim); color:var(--gold); }
+  .scrubber-item-content { flex:1; line-height:1.5; color:var(--text-dim); }
+  .scrubber-item-date { font-size:10px; color:var(--text-dimmer); margin-top:2px; }
+  .btn-rescrub { background:transparent; border:1px solid var(--border); color:var(--text-dim); padding:5px 10px; border-radius:6px; cursor:pointer; font-family:'DM Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.08em; transition:all 0.2s; display:flex; align-items:center; gap:5px; }
+  .btn-rescrub:hover { border-color:var(--purple); color:var(--purple); }
+  .search-loading { display:flex; align-items:center; gap:10px; color:var(--text-dim); font-size:13px; padding:10px 0; }
+
+  /* ─── ELECTABILITY RATING ─── */
+  .poll-item { display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; gap:8px; }
+  .poll-item:last-child { border-bottom:none; }
+  .poll-name { color:var(--text-dim); flex:1; }
+  .poll-bar-wrap { width:80px; height:4px; background:var(--border); border-radius:2px; overflow:hidden; }
+  .poll-bar-fill { height:100%; border-radius:2px; background:var(--blue); }
+  .poll-pct { font-family:'DM Mono',monospace; font-weight:600; }
 </style>
 </head>
 <body>
@@ -1099,116 +1132,76 @@
 <!-- NAV -->
 <div style="border-bottom:1px solid rgba(139,105,20,0.3); background:var(--navy); position:sticky; top:64px; z-index:99; overflow-x:auto;">
   <div class="container" style="padding-top:8px; padding-bottom:8px;">
-    <div class="nav-tabs" id="navTabs" style="flex-wrap:nowrap;">
-      <button class="nav-tab active" onclick="showView('assess')">Assess</button>
+    <div class="nav-tabs" id="navTabs" style="flex-wrap:nowrap; gap:1px;">
+      <button class="nav-tab active" onclick="showView('results')">Results</button>
       <button class="nav-tab" onclick="showView('community')">Community Assessment</button>
-      <button class="nav-tab" onclick="showView('results')">Results</button>
+      <button class="nav-tab" onclick="showView('assess')">Full Report</button>
       <button class="nav-tab" onclick="showView('compare')">Compare</button>
       <button class="nav-tab" onclick="showView('saved')">Saved Audits</button>
-      <button class="nav-tab" onclick="showView('methodology')">Methodology</button>
+      <button class="nav-tab" onclick="showView('methodology')">About</button>
     </div>
   </div>
 </div>
 
 <main>
 
-  <!-- ══════════ VIEW: ASSESS ══════════ -->
-  <div id="view-assess" class="view active">
+  <!-- ══════════ VIEW: FULL REPORT ══════════ -->
+  <div id="view-assess" class="view">
     <div class="container" style="padding-top:24px;">
 
-      <!-- Subject Input -->
-      <div class="card">
-        <div class="subject-toggle">
-          <button class="toggle-btn active" onclick="setType('candidate')">👤 Candidate</button>
-          <button class="toggle-btn" onclick="setType('policy')">📄 Policy / Bill</button>
-        </div>
+      <div class="error-box" id="errorBoxReport" style="margin-bottom:16px;"></div>
 
-        <div class="input-row" style="margin-bottom:10px;">
-          <div class="input-group" style="flex:2; min-width:180px;">
-            <label id="nameLabel">Candidate Name</label>
-            <input type="text" id="nameInput" placeholder="e.g. Shirley Chisholm, Prop 47...">
-          </div>
-          <div class="input-group" style="flex:1; min-width:140px;">
-            <label>Jurisdiction (optional)</label>
-            <input type="text" id="jurisdictionInput" placeholder="City / State">
-          </div>
-  
-        </div>
-
-        <div id="candidateExtras" class="input-row">
-          <div class="input-group">
-            <label>Office / Position (optional)</label>
-            <input type="text" id="officeInput" placeholder="e.g. Mayor, DA, Senate">
+      <!-- Report header — share-card image + subject metadata strip -->
+      <div id="reportHeader" style="display:none;margin-bottom:20px;">
+        <div class="card" style="padding:0;overflow:hidden;">
+          <img id="reportShareImg" src="" alt="Results Card" style="width:100%;display:block;border-radius:12px 12px 0 0;">
+          <div style="padding:14px 16px;border-top:1px solid var(--border);">
+            <div style="display:flex;gap:24px;flex-wrap:wrap;">
+              <div><div class="rpt-meta-label">Subject</div><div class="rpt-meta-val" id="rptName">—</div></div>
+              <div><div class="rpt-meta-label">Pathway</div><div class="rpt-meta-val" id="rptPathway">—</div></div>
+              <div><div class="rpt-meta-label">Jurisdiction</div><div class="rpt-meta-val" id="rptJurisdiction">—</div></div>
+              <div id="rptOfficeWrap" style="display:none;"><div class="rpt-meta-label">Office / Bill</div><div class="rpt-meta-val" id="rptOffice">—</div></div>
+              <div><div class="rpt-meta-label">Analyzed</div><div class="rpt-meta-val" id="rptDate">—</div></div>
+            </div>
           </div>
         </div>
-        <div id="policyExtras" class="input-row" style="display:none;">
-          <div class="input-group" style="flex:1;">
-            <label>Year (optional)</label>
-            <input type="text" id="yearInput" placeholder="e.g. 1994">
-          </div>
-          <div class="input-group" style="flex:2;">
-            <label>Sponsor / Author (optional)</label>
-            <input type="text" id="sponsorInput" placeholder="Bill author">
-          </div>
-        </div>
-
-        <!-- Pathway Modifier -->
-        <div id="pathwaySection" style="margin-top:14px;">
-          <div class="section-label" style="margin-bottom:8px;">Subject Pathway</div>
-          <div class="pathway-toggle">
-            <button class="pathway-btn active" id="pw-elected" onclick="setPathway('elected')">
-              <span class="pathway-label">🏛️ Elected Official</span>
-              <span class="pathway-sub">Has or held formal office</span>
-            </button>
-            <button class="pathway-btn" id="pw-community" onclick="setPathway('community')">
-              <span class="pathway-label">✊ Community Leader</span>
-              <span class="pathway-sub">Organizer, activist, civic leader</span>
-            </button>
-          </div>
-          <div class="pathway-note" id="pathwayNote">
-            <strong style="color:var(--gold);">Community Leader Context:</strong> Fruit scores reflect documented impact through organizing, campaigns, and civic work — not legislation. Weak Fruit does not mean failure; it may mean this person operated without institutional power.
-          </div>
-        </div>
-
-        <div class="analyze-row">
-          <button class="btn-analyze" id="analyzeBtn" onclick="autoAnalyze()">
-            <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Analyze
-          </button>
-          <div class="analyze-hint">
-            Let AI pre-fill the form from public sources, then edit anything you disagree with — or skip and score it yourself below.
-          </div>
-        </div>
-
-        <div class="error-box" id="errorBox"></div>
       </div>
 
-      <!-- AI AUDIT REPORT (populated by autoAnalyze) -->
+      <!-- Empty state — shown until an analysis exists -->
+      <div id="auditBoxEmpty" class="report-empty">
+        <i class="fa-solid fa-file-contract"></i>
+        <div class="report-empty-title">No Report Generated</div>
+        <div style="font-size:13px;">Run an Auto-Analyze from the Results tab to generate the full audit report.</div>
+        <button class="btn-analyze" onclick="showView('results')" style="margin:20px auto 0;">
+          <i class="fa-solid fa-arrow-left"></i> Go to Results
+        </button>
+      </div>
+
+      <!-- Audit Report (populated by autoAnalyze) -->
       <div class="audit-box" id="auditBox" style="display:none;">
         <div class="audit-box-header">
-          <span class="audit-box-title"><i class="fa-solid fa-microscope"></i> Forensic Audit Report</span>
-          <button class="btn-ghost" onclick="document.getElementById('auditBox').style.display='none';" title="Hide report">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-        </div>
-        <div id="confidenceWrap" class="confidence-wrap" style="display:none;">
-          <div class="confidence-label">Evidence Quality</div>
-          <div class="confidence-track"><div class="confidence-fill" id="confidenceFill"></div></div>
-          <div class="confidence-value" id="confidenceValue">0%</div>
+          <span class="audit-box-title"><i class="fa-solid fa-file-contract"></i> Official Audit Report</span>
+          <span style="font-size:11px;color:var(--text-dim);">Powered by Claude</span>
         </div>
         <div class="audit-box-body" id="auditContent"></div>
-      </div>
 
-      <!-- Pointer to Community Assessment tab -->
-      <div class="card" style="background:rgba(167,139,250,0.06);border-color:rgba(167,139,250,0.25);">
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-          <i class="fa-solid fa-people-arrows" style="font-size:22px;color:var(--purple);opacity:0.85;"></i>
-          <div style="flex:1;min-width:240px;">
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:0.05em;color:var(--text);">Community Assessment</div>
-            <div style="font-size:12px;color:var(--text-dim);line-height:1.5;margin-top:2px;">Adjust the per-criterion scores by hand — with optional community justifications for each section. Tracks baseline vs adjusted automatically.</div>
+        <!-- Legislative Scrubber -->
+        <div id="scrubberSection" style="display:none; border-top:1px solid var(--border); margin-top:4px;">
+          <div class="scrubber-toggle" onclick="toggleScrubber()">
+            <span class="scrubber-toggle-label"><i class="fa-solid fa-gavel" style="margin-right:6px;"></i>Legislative Record Scrubber</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button class="btn-rescrub" id="rescrubBtn" onclick="event.stopPropagation(); runLegislativeScrubber()">
+                <i class="fa-solid fa-rotate"></i> Re-Scrub
+              </button>
+              <i class="fa-solid fa-chevron-down" id="scrubberChevron" style="color:var(--text-dimmer); font-size:11px; transition:transform 0.2s;"></i>
+            </div>
           </div>
-          <button class="btn-analyze" style="background:var(--purple);" onclick="showView('community')">
-            <i class="fa-solid fa-arrow-right"></i> Open
-          </button>
+          <div id="scrubberBody" class="scrubber-body">
+            <div id="scrubberLoading" class="search-loading" style="display:none;">
+              <div class="loader" style="border-top-color:var(--purple);"></div> Scrubbing legislative record...
+            </div>
+            <div id="scrubberContent"></div>
+          </div>
         </div>
       </div>
 
@@ -1485,8 +1478,84 @@
   </div>
 
   <!-- ══════════ VIEW: RESULTS ══════════ -->
-  <div id="view-results" class="view">
+  <div id="view-results" class="view active">
     <div class="container" style="padding-top:24px;">
+
+      <!-- Subject Input -->
+      <div class="card">
+        <div class="subject-toggle">
+          <button class="toggle-btn active" onclick="setType('candidate')">👤 Candidate</button>
+          <button class="toggle-btn" onclick="setType('policy')">📄 Policy / Bill</button>
+        </div>
+
+        <div class="input-row" style="margin-bottom:10px;">
+          <div class="input-group" style="flex:2; min-width:180px;">
+            <label id="nameLabel">Candidate Name</label>
+            <input type="text" id="nameInput" placeholder="e.g. Shirley Chisholm, Prop 47...">
+          </div>
+          <div class="input-group" style="flex:1; min-width:140px;">
+            <label>Jurisdiction (optional)</label>
+            <input type="text" id="jurisdictionInput" placeholder="City / State">
+          </div>
+        </div>
+
+        <div id="candidateExtras" class="input-row">
+          <div class="input-group">
+            <label>Office / Position (optional)</label>
+            <input type="text" id="officeInput" placeholder="e.g. Mayor, DA, Senate">
+          </div>
+        </div>
+        <div id="policyExtras" class="input-row" style="display:none;">
+          <div class="input-group" style="flex:1;">
+            <label>Year (optional)</label>
+            <input type="text" id="yearInput" placeholder="e.g. 1994">
+          </div>
+          <div class="input-group" style="flex:2;">
+            <label>Sponsor / Author (optional)</label>
+            <input type="text" id="sponsorInput" placeholder="Bill author">
+          </div>
+        </div>
+
+        <!-- Pathway Modifier -->
+        <div id="pathwaySection" style="margin-top:14px;">
+          <div class="section-label" style="margin-bottom:8px;">Subject Pathway</div>
+          <div class="pathway-toggle">
+            <button class="pathway-btn active" id="pw-elected" onclick="setPathway('elected')">
+              <span class="pathway-label">🏛️ Elected Official</span>
+              <span class="pathway-sub">Has or held formal office</span>
+            </button>
+            <button class="pathway-btn" id="pw-community" onclick="setPathway('community')">
+              <span class="pathway-label">✊ Community Leader</span>
+              <span class="pathway-sub">Organizer, activist, civic leader</span>
+            </button>
+          </div>
+          <div class="pathway-note" id="pathwayNote">
+            <strong style="color:var(--gold);">Community Leader Context:</strong> Fruit scores reflect documented impact through organizing, campaigns, and civic work — not legislation. Weak Fruit does not mean failure; it may mean this person operated without institutional power.
+          </div>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-dim);margin-top:14px;">
+          <input type="checkbox" id="scrubberOptIn" style="width:16px;height:16px;">
+          <span><i class="fa-solid fa-gavel" style="color:var(--purple);margin-right:4px;"></i>Include Legislative Scrubber <span style="color:var(--text-dimmer);font-size:10px;">(uses extra credits)</span></span>
+        </label>
+
+        <div class="analyze-row">
+          <button class="btn-analyze" id="analyzeBtn" onclick="autoAnalyze()">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Analyze
+          </button>
+          <div class="analyze-hint">
+            Let AI pre-fill the form from public sources, then edit anything you disagree with — or open Community Assessment to score it yourself.
+          </div>
+        </div>
+
+        <div id="confidenceWrap" class="confidence-wrap" style="display:none;">
+          <div class="confidence-label">Evidence Quality</div>
+          <div class="confidence-track"><div class="confidence-fill" id="confidenceFill"></div></div>
+          <div class="confidence-value" id="confidenceValue">0%</div>
+        </div>
+
+        <div class="error-box" id="errorBox"></div>
+      </div>
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
@@ -1543,6 +1612,44 @@
       <div class="card" id="verdictCard">
         <div class="section-label">Verdict Breakdown</div>
         <div id="verdictDesc" style="font-size:14px;color:var(--text-dim);line-height:1.7;margin-top:8px;"></div>
+      </div>
+
+      <!-- Electability Rating (separate indicator, backend-routed) -->
+      <div class="card" id="electabilityCard" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="background:var(--blue-dim);color:var(--blue);width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;"><i class="fa-solid fa-chart-line"></i></div>
+            <div>
+              <div style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:0.05em;color:var(--blue);">Electability Rating <span style="font-size:11px;color:var(--text-dimmer);font-family:'DM Mono',monospace;font-weight:normal;">— separate indicator</span></div>
+              <div id="electTier" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--blue);margin-top:2px;"></div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <div id="electabilityLoading" class="search-loading" style="display:none;">
+              <div class="loader" style="border-top-color:var(--blue);"></div> Searching polls...
+            </div>
+            <div id="electabilityResult" style="display:none;align-items:center;gap:12px;">
+              <div style="text-align:right;">
+                <div style="font-family:'Bebas Neue',sans-serif;font-size:42px;line-height:1;" id="electScoreNum">—</div>
+                <div style="font-size:10px;color:var(--text-dimmer);">out of 10</div>
+              </div>
+              <div style="width:80px;">
+                <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+                  <div id="electBarFill" style="height:100%;border-radius:3px;background:var(--blue);transition:width 0.6s ease;width:0%;"></div>
+                </div>
+              </div>
+            </div>
+            <button class="btn-rescrub" id="reelectBtn" onclick="runElectabilityScore()" style="border-color:rgba(37,99,168,0.4);color:var(--blue);">
+              <i class="fa-solid fa-rotate"></i> Refresh
+            </button>
+          </div>
+        </div>
+        <div id="electContext" style="font-size:12px;color:var(--text-dim);margin-top:10px;line-height:1.5;display:none;"></div>
+        <div id="electPollItems" style="margin-top:8px;"></div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--text-dimmer);line-height:1.6;">
+          <i class="fa-solid fa-circle-info" style="color:var(--blue);margin-right:4px;opacity:0.7;"></i>
+          A high Root &amp; Fruit alignment score reflects documented values and community record — it does not predict electoral viability. Electability is based on live polling data and shown as a separate, independent indicator.
+        </div>
       </div>
 
       <!-- Share Card -->
@@ -2254,6 +2361,9 @@ async function autoAnalyze() {
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('auditBox').style.display = 'none';
   document.getElementById('confidenceWrap').style.display = 'none';
+  document.getElementById('electabilityCard').style.display = 'none';
+  document.getElementById('scrubberSection').style.display = 'none';
+  document.getElementById('errorBoxReport').style.display = 'none';
 
   const isCandidate = subjectType === 'candidate';
   const isCommunity = currentPathway === 'community';
@@ -2278,6 +2388,18 @@ async function autoAnalyze() {
     const parsed = JSON.parse(text);
     lastAnalysisData = parsed;
     await applyAnalysis(parsed);
+
+    // Reveal the report + refresh the Results view in place (user stays on Results)
+    document.getElementById('auditBoxEmpty').style.display = 'none';
+    updateResultsView();
+    setTimeout(drawShareCard, 120);
+    setTimeout(populateReportHeader, 250);
+
+    // Auxiliary backend-routed lookups (candidates only)
+    if (subjectType === 'candidate') {
+      runElectabilityScore();
+      if (document.getElementById('scrubberOptIn')?.checked) runLegislativeScrubber(name);
+    }
 
   } catch(err) {
     console.error(err);
@@ -2957,6 +3079,18 @@ function resetAll() {
   baselineScores = null;
   const auditBox = document.getElementById('auditBox');
   if (auditBox) auditBox.style.display = 'none';
+  // Full Report shell + auxiliary cards back to empty state
+  const setDisp = (id, d) => { const el = document.getElementById(id); if (el) el.style.display = d; };
+  setDisp('auditBoxEmpty', 'block');
+  setDisp('reportHeader', 'none');
+  setDisp('scrubberSection', 'none');
+  setDisp('electabilityCard', 'none');
+  setDisp('confidenceWrap', 'none');
+  setDisp('errorBoxReport', 'none');
+  const scrubCB = document.getElementById('scrubberOptIn');
+  if (scrubCB) scrubCB.checked = false;
+  const scrubContent = document.getElementById('scrubberContent');
+  if (scrubContent) scrubContent.innerHTML = '';
   // Clear justifications
   ['Root','Branch','Fruit','Vis','Toxic','Peoples'].forEach(k => {
     const el = document.getElementById('just' + k);
@@ -3284,6 +3418,234 @@ function downloadShareCard() {
 }
 
 // ══════════════════════════════════════════════
+//  FULL REPORT HEADER — subject metadata + share-card image
+// ══════════════════════════════════════════════
+function populateReportHeader() {
+  const header = document.getElementById('reportHeader');
+  if (!header) return;
+  if (!lastAnalysisData) { header.style.display = 'none'; return; }
+
+  const name   = document.getElementById('nameInput')?.value?.trim() || '—';
+  const juris  = document.getElementById('jurisdictionInput')?.value?.trim() || '—';
+  const office = (document.getElementById('officeInput')?.value?.trim() || document.getElementById('yearInput')?.value?.trim()) || '';
+  document.getElementById('rptName').textContent         = name;
+  document.getElementById('rptPathway').textContent      = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
+  document.getElementById('rptJurisdiction').textContent = juris;
+  document.getElementById('rptDate').textContent         = new Date().toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'});
+  const ow = document.getElementById('rptOfficeWrap');
+  if (ow) { ow.style.display = office ? 'block' : 'none'; document.getElementById('rptOffice').textContent = office; }
+
+  header.style.display = 'block';
+
+  // Best-effort: capture the share-card canvas as the header image
+  const canvas = document.getElementById('shareCardCanvas');
+  if (canvas) {
+    try { drawShareCard(); } catch(e) { /* canvas not ready */ }
+    setTimeout(() => {
+      try {
+        const img = document.getElementById('reportShareImg');
+        if (img && canvas.width > 0) img.src = canvas.toDataURL('image/jpeg', 0.92);
+      } catch(e) { /* ignore */ }
+    }, 150);
+  }
+}
+
+// ══════════════════════════════════════════════
+//  ROBUST JSON EXTRACTOR (tolerates fences / trailing prose)
+// ══════════════════════════════════════════════
+function extractJSON(raw) {
+  let text = String(raw || '').replace(/```json/g, '').replace(/```/g, '').trim();
+  const start = text.indexOf('{');
+  if (start === -1) throw new Error('No JSON found in response');
+  const end = text.lastIndexOf('}');
+  if (end > start) {
+    try { return JSON.parse(text.slice(start, end + 1)); } catch(e) { /* fall through */ }
+  }
+  throw new Error('Could not parse JSON from response');
+}
+
+// Shared helper: collect the text from an /api/search (or /api/analyze) message
+function messageText(data) {
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text || '').join('');
+}
+
+// ══════════════════════════════════════════════
+//  LEGISLATIVE SCRUBBER (backend-routed via /api/search)
+// ══════════════════════════════════════════════
+let scrubberOpen = true;
+function toggleScrubber() {
+  scrubberOpen = !scrubberOpen;
+  document.getElementById('scrubberBody').style.display = scrubberOpen ? 'block' : 'none';
+  document.getElementById('scrubberChevron').style.transform = scrubberOpen ? 'rotate(180deg)' : 'rotate(0deg)';
+}
+
+async function runLegislativeScrubber(target) {
+  const name = target || document.getElementById('nameInput').value.trim();
+  if (!name) return;
+
+  document.getElementById('scrubberSection').style.display = 'block';
+  document.getElementById('scrubberLoading').style.display = 'flex';
+  document.getElementById('scrubberContent').innerHTML = '';
+  const rescrub = document.getElementById('rescrubBtn');
+  if (rescrub) rescrub.disabled = true;
+
+  const scrubPrompt = `Search for and compile the legislative and public record of "${name}" specifically related to these five policy areas:
+1. Criminal Justice & Anti-Carceral Policy (votes, bills, statements on policing, incarceration, bail reform, police accountability)
+2. Economic Transfer & Reparations (votes, bills, statements on reparations, wealth transfer, direct community investment)
+3. Housing & Tenant Protections (votes, bills, statements on affordable housing, eviction protections, homelessness)
+4. Community Institutions & CBO Funding (votes, bills, statements on nonprofit funding, faith-based organizations, community power)
+5. Intergenerational Wealth & Asset Building (votes, bills, statements on land ownership, endowments, legacy assets)
+
+For each item found, identify the type ("vote", "bill", or "statement"), the specific action taken, the date or approximate year, and whether it was PRO or CON community interests.
+
+Return ONLY valid JSON:
+{
+  "criteria": [
+    {"area": "Criminal Justice & Anti-Carceral", "items": [{"type": "vote|bill|statement", "description": "specific action", "date": "year or date", "stance": "pro|con|mixed"}]},
+    {"area": "Economic Transfer & Reparations", "items": []},
+    {"area": "Housing & Tenant Protections", "items": []},
+    {"area": "Community Institutions & CBO Funding", "items": []},
+    {"area": "Intergenerational Wealth & Asset Building", "items": []}
+  ],
+  "summary": "1-2 sentence overall legislative record summary"
+}`;
+
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const response = await fetch(backendUrl + '/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_tokens: 3000,
+        max_uses: 5,
+        system: 'You are a legislative research analyst. Search thoroughly and return ONLY valid JSON — no markdown fences, no prose.',
+        messages: [{ role: 'user', content: scrubPrompt }]
+      })
+    });
+    if (!response.ok) throw new Error('API Error ' + response.status);
+    const data = await response.json();
+    renderScrubberResults(extractJSON(messageText(data)));
+  } catch(err) {
+    document.getElementById('scrubberContent').innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 0;">Scrub failed: ${err.message}</div>`;
+  } finally {
+    document.getElementById('scrubberLoading').style.display = 'none';
+    if (rescrub) rescrub.disabled = false;
+  }
+}
+
+function renderScrubberResults(data) {
+  const stanceColor = s => s === 'pro' ? 'var(--green)' : s === 'con' ? 'var(--red)' : 'var(--gold)';
+  const typeClass = t => t === 'vote' ? 'scrubber-vote' : t === 'bill' ? 'scrubber-bill' : 'scrubber-statement';
+  let html = '';
+  if (data.summary) html += `<div style="font-size:12px;color:var(--text-dim);line-height:1.6;margin-bottom:16px;padding:10px 12px;background:var(--surface2);border-radius:8px;">${data.summary}</div>`;
+  (data.criteria || []).forEach(section => {
+    if (!section.items?.length) return;
+    html += `<div class="scrubber-criteria-block"><div class="scrubber-criteria-title">${section.area}</div>`;
+    section.items.forEach(item => {
+      html += `<div class="scrubber-item">
+        <span class="scrubber-item-type ${typeClass(item.type)}">${item.type}</span>
+        <div class="scrubber-item-content">
+          <div style="color:${stanceColor(item.stance)};">${item.description}</div>
+          <div class="scrubber-item-date">${item.date || ''}</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  if (!html) html = `<div style="color:var(--text-dimmer);font-size:12px;padding:8px 0;">No specific legislative record found for this subject.</div>`;
+  document.getElementById('scrubberContent').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════
+//  ELECTABILITY RATING (backend-routed via /api/search)
+// ══════════════════════════════════════════════
+async function runElectabilityScore() {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) return;
+
+  const card = document.getElementById('electabilityCard');
+  card.style.display = 'block';
+  document.getElementById('electabilityLoading').style.display = 'flex';
+  document.getElementById('electabilityResult').style.display = 'none';
+  const btn = document.getElementById('reelectBtn');
+  if (btn) btn.disabled = true;
+
+  const electPrompt = `Search for current polling data and electoral viability information for "${name}".
+
+Find current poll standings (% support), name recognition/favorability if available, electoral context (incumbent, challenger, frontrunner, underdog), and any trend (rising, falling, stable). Then assign an Electability Rating from 0-10:
+0-2 = No viable path, unknown, or deeply unfavorable
+3-4 = Long shot, limited name recognition or support
+5-6 = Competitive, real chance but significant obstacles
+7-8 = Strong contender, polling well or strong structural advantages
+9-10 = Heavy favorite, dominant polling position
+
+Return ONLY valid JSON:
+{
+  "score": 0,
+  "tier": "Heavy Favorite|Strong Contender|Competitive|Long Shot|Not Viable",
+  "context": "1-2 sentence summary of electoral standing",
+  "polls": [{"source": "poll name or source", "result": "X%", "date": "date or timeframe"}],
+  "trend": "rising|falling|stable|unknown"
+}`;
+
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const response = await fetch(backendUrl + '/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_tokens: 1500,
+        max_uses: 4,
+        system: 'You are an electoral analyst. Search for current polling data and return ONLY valid JSON — no markdown fences, no prose.',
+        messages: [{ role: 'user', content: electPrompt }]
+      })
+    });
+    if (!response.ok) throw new Error('API Error ' + response.status);
+    const data = await response.json();
+    renderElectabilityResult(extractJSON(messageText(data)));
+  } catch(err) {
+    document.getElementById('electabilityLoading').style.display = 'none';
+    const ctxEl = document.getElementById('electContext');
+    ctxEl.style.display = 'block';
+    ctxEl.textContent = 'Could not retrieve polling data: ' + err.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderElectabilityResult(data) {
+  const score = Math.min(10, Math.max(0, data.score || 0));
+  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
+  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
+
+  document.getElementById('electScoreNum').textContent = score;
+  document.getElementById('electScoreNum').style.color = electColor;
+  document.getElementById('electBarFill').style.width = (score / 10 * 100) + '%';
+  document.getElementById('electBarFill').style.background = electColor;
+  document.getElementById('electTier').textContent = (data.tier || '') + trendIcon;
+  document.getElementById('electTier').style.color = electColor;
+
+  const ctxEl = document.getElementById('electContext');
+  ctxEl.textContent = data.context || '';
+  ctxEl.style.display = data.context ? 'block' : 'none';
+
+  let pollHtml = '';
+  (data.polls || []).forEach(p => {
+    const pct = parseFloat(p.result) || 0;
+    pollHtml += `<div class="poll-item">
+      <span class="poll-name">${p.source}</span>
+      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
+      <span class="poll-pct" style="color:${electColor};">${p.result}</span>
+      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${p.date || ''}</span>
+    </div>`;
+  });
+  document.getElementById('electPollItems').innerHTML = pollHtml;
+
+  document.getElementById('electabilityLoading').style.display = 'none';
+  document.getElementById('electabilityResult').style.display = 'flex';
+}
+
+// ══════════════════════════════════════════════
 //  UPDATED showView — handles methodology + share card
 // ══════════════════════════════════════════════
 function showView(v) {
@@ -3291,11 +3653,12 @@ function showView(v) {
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
   const viewEl = document.getElementById('view-'+v);
   if (viewEl) viewEl.classList.add('active');
-  const tabs = ['assess','community','results','compare','saved','methodology'];
+  const tabs = ['results','community','assess','compare','saved','methodology'];
   const idx = tabs.indexOf(v);
   if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
   if (v === 'community') updateCommunityScoreIndicator();
   if (v === 'results') { updateResultsView(); setTimeout(drawShareCard, 100); }
+  if (v === 'assess') populateReportHeader();
   if (v === 'saved') renderSavedList();
   if (v === 'compare') populateCompareSelects();
 }
@@ -3306,6 +3669,7 @@ function showView(v) {
 renderSavedList();
 loadFromURL();
 calculate();
+updateResultsView();   // Results is the default view — render its radar + score cells on load
 initSplash();
 </script>
 </body>
