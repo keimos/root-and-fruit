@@ -17,7 +17,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
   - All app state lives in module-level JS variables in the inline `<script>`. Persistence is via `localStorage` (user ID + offline cache) and the backend (`/api/audits`).
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`.
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
-- **Storage:** Firestore Native, two collections — `audits` (keyed by user) and `shared_audits` (token-keyed, public-readable).
+- **Storage:** Firestore Native, three collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), and `registrations` (append-only splash-registration leads).
 - **Deploy:** Designed for two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **No CI/CD or infra-as-code is checked in** — the repo ships application code only.
 
 ---
@@ -27,7 +27,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 ```
 root-and-fruit/
 ├── backend/
-│   ├── server.js         ← Express API: /api/analyze, /api/search, /api/audits, /api/share, /health
+│   ├── server.js         ← Express API: /api/analyze, /api/search, /api/register, /api/audits, /api/share, /health
 │   ├── Dockerfile
 │   └── package.json
 ├── frontend/
@@ -62,6 +62,7 @@ Cloud Run: root-and-fruit-backend (Node 20, port 8080)
    ├── GET  /health
    ├── POST /api/analyze              → Anthropic Messages API (adaptive thinking + web_search)
    ├── POST /api/search               → Anthropic Messages API (web_search, no thinking) — Scrubber + Electability
+   ├── POST /api/register             → Resend email (team notify + auto-reply) + Firestore: registrations.add(...)
    ├── POST /api/audits               → Firestore: audits.add({userId, ...audit})
    ├── GET  /api/audits/:userId       → Firestore: audits.where(userId).orderBy(createdAt desc)
    ├── DELETE /api/audits/:userId/:id → Firestore: audits.delete (with userId ownership check)
@@ -71,7 +72,8 @@ Cloud Run: root-and-fruit-backend (Node 20, port 8080)
                                                                                       ▼
                                                                                  Firestore
                                                                             (collections:
-                                                                              audits, shared_audits)
+                                                                              audits, shared_audits,
+                                                                              registrations)
                                                                                       ▲
                                                                                       │
                                                                             Anthropic API
@@ -203,6 +205,7 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
 | POST   | `/api/analyze`                    | Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object. |
 | POST   | `/api/search`                     | Lighter web-search proxy for the **Legislative Scrubber** and **Electability Rating**. Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
+| POST   | `/api/register`                   | Splash registration. Body: `{name, email, phone?, org?, isEvent?, eventName?, eventLocation?, eventDate?}`. Validates name + email, persists the lead to Firestore `registrations` (best-effort), then sends a team notification + registrant auto-reply via **Resend** (best-effort — `RESEND_API_KEY` only). Returns `{ ok:true, stored, emailed }`; email failures don't fail the request. Replaces the old `mailto:`/FormSubmit flow. |
 | POST   | `/api/audits`                     | `{userId, audit}` → adds doc with `createdAt`/`updatedAt` Firestore timestamps. |
 | GET    | `/api/audits/:userId`             | Returns audits for a user, ordered by `createdAt desc`, capped at `limit` (default 50, max 100). Timestamps converted to ISO strings. |
 | DELETE | `/api/audits/:userId/:auditId`    | Verifies ownership before deleting (403 if `userId` doesn't match). |
@@ -234,6 +237,9 @@ anthropic.messages.stream({
 |-------------------------|---------|----------------------------------------------------------------------------------------------|
 | `ANTHROPIC_API_KEY`     | yes     | If missing, `/api/analyze` returns 500 `"API key not configured"` but other endpoints still work. Mounted from Secret Manager `anthropic-api-key:latest` in Cloud Run. |
 | `ANTHROPIC_MODEL`       | no      | Defaults to `claude-opus-4-7`.                                                               |
+| `RESEND_API_KEY`        | no      | Enables `/api/register` email. If missing, registrations are still stored in Firestore but no email is sent (logged as a warning). Mount from Secret Manager in Cloud Run — never plaintext. |
+| `REGISTRATION_EMAIL`    | no      | Inbox that receives new-registration notifications. Defaults to `rootandfruit@wetheanvil.org`. |
+| `REGISTRATION_FROM`     | no      | Resend `from` sender. Defaults to the `onboarding@resend.dev` sandbox (delivers only to the Resend account owner) — **set this to a verified domain sender (e.g. `Root & Fruit <noreply@rootandfruit.app>`) in production.** |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
 | `ALLOWED_ORIGIN`        | no      | CORS origin allowlist. Defaults to `*`.                                                      |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
@@ -276,7 +282,7 @@ There is **no CI/CD or infra-as-code in this repo**. Deployment is whatever the 
 
 The non-negotiable wiring:
 
-1. Provision a Firestore (or Firestore-compatible) database. The app uses two collections: `audits` and `shared_audits`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise.
+1. Provision a Firestore (or Firestore-compatible) database. The app uses three collections: `audits`, `shared_audits`, and `registrations`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations` is append-only (no ordered query), so it needs no special index.
 2. Deploy the **backend** first. It needs `ANTHROPIC_API_KEY` (from a secret store, never a plaintext env), service-account credentials with Firestore read/write, and `GOOGLE_CLOUD_PROJECT` (or equivalent) for the Firestore client. Long-running AI requests can take tens of seconds — set the platform's request timeout to ≥ 300s.
 3. Deploy the **frontend** with `BACKEND_URL` pointing at the backend's public URL. The frontend image carries no build-time config — `BACKEND_URL` is read at request time and injected into HTML via `frontend/server.js`.
 4. (Optional) Tighten CORS by setting `ALLOWED_ORIGIN` on the backend to the frontend's public URL.

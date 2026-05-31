@@ -1004,7 +1004,7 @@
       <div class="reg-error" id="regError">Please enter your full name and a valid email address to continue.</div>
 
       <div style="margin-top:24px;">
-        <button class="btn-splash-next" onclick="submitRegistration()">
+        <button class="btn-splash-next" id="regSubmitBtn" onclick="submitRegistration()">
           <i class="fa-solid fa-unlock"></i> Access Root & Fruit
         </button>
       </div>
@@ -3228,37 +3228,9 @@ toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getEleme
 // ══════════════════════════════════════════════
 //  SPLASH OVERLAY — DISCLAIMER & REGISTRATION
 // ══════════════════════════════════════════════
-//  Set the address that registration notifications are sent to:
-const REGISTRATION_EMAIL = 'rootandfruit@wetheanvil.org';
-
-const AUTO_REPLY_SUBJECT = "Welcome to Root & Fruit: You're Part of Something Bigger";
-
-function buildAutoReplyBody(firstName) {
-  return `Dear ${firstName},
-
-Welcome to the Root & Fruit Integrity Index. You just joined something that matters. Root & Fruit was built on a simple conviction: by their fruits, shall you know them. Not their rhetoric. Their record.
-
-You're now connected to a tool rooted in 240 years of Free African civic tradition, from the Free African Society of 1787 straight to you and every community member who ever had to size up a candidate or policy with nothing but a voter guide and their own good sense. We built Root & Fruit to sharpen that judgment, and foster more informed community conversation.
-
-Root & Fruit, its scoring framework, the audit reports, the community assessment: all of it was designed to bring information right to the hands of the people and we need your support to keep it going, growing and accessible without compromise. If you believe this kind of tool should exist, please consider making a donation of your choosing to help us to continue building tools that meet the needs of our community.
-
-SUPPORT THE ANVIL INSTITUTE: [INSERT DONATION LINK]
-
-The Anvil Institute is a 501(c)(3) nonprofit charitable organization. Your donation is tax-deductible to the extent permitted by law.
-
-Your support keeps this work in the hands of the people, not the politicians.
-
-Thank you for your support and dedication. Now go out and make the change you want to see!
-
-In solidarity,
-
-Kirkpatrick (Kp) Tyler
-Executive Director
-The Anvil Institute · 501(c)(3) Nonprofit Charitable Organization
-
-© 2026 Cast Your Net Media and Technologies · The Anvil Institute · Free African Alliance
-rootandfruit.app`;
-}
+//  Registration is sent through the backend (POST /api/register), which emails
+//  via Resend and persists the lead to Firestore. The notification address,
+//  sender, and auto-reply copy all live server-side in backend/server.js.
 
 function initSplash() {
   const registered = sessionStorage.getItem('rfRegistered');
@@ -3307,7 +3279,7 @@ function toggleEventSection() {
   section.classList.toggle('visible', cb.checked);
 }
 
-function submitRegistration() {
+async function submitRegistration() {
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
   const errEl = document.getElementById('regError');
@@ -3315,59 +3287,42 @@ function submitRegistration() {
   if (!name || !emailValid) { errEl.style.display = 'block'; return; }
   errEl.style.display = 'none';
 
-  const phone = document.getElementById('regPhone').value.trim();
-  const org = document.getElementById('regOrg').value.trim();
-  const isEvent = document.getElementById('eventToggleCB').checked;
-  const eventName = document.getElementById('regEventName').value.trim();
-  const eventLocation = document.getElementById('regEventLocation').value.trim();
-  const eventDate = document.getElementById('regEventDate').value;
-  const timestamp = new Date().toLocaleString();
+  const payload = {
+    name, email,
+    phone: document.getElementById('regPhone').value.trim(),
+    org: document.getElementById('regOrg').value.trim(),
+    isEvent: document.getElementById('eventToggleCB').checked,
+    eventName: document.getElementById('regEventName').value.trim(),
+    eventLocation: document.getElementById('regEventLocation').value.trim(),
+    eventDate: document.getElementById('regEventDate').value
+  };
 
-  // Store in sessionStorage
-  sessionStorage.setItem('rfRegistered', 'true');
-  sessionStorage.setItem('rfUserData', JSON.stringify({ name, email, phone, org, isEvent, eventName, eventLocation, eventDate, timestamp }));
+  // Local copy for this session
+  sessionStorage.setItem('rfUserData', JSON.stringify({ ...payload, timestamp: new Date().toLocaleString() }));
 
-  // Build email body
-  let body = `ROOT & FRUIT — NEW USER REGISTRATION\n`;
-  body += `─────────────────────────────────────\n`;
-  body += `Timestamp   : ${timestamp}\n`;
-  body += `Name        : ${name}\n`;
-  body += `Email       : ${email}\n`;
-  if (phone) body += `Phone       : ${phone}\n`;
-  if (org)   body += `Organization: ${org}\n`;
-  if (isEvent) {
-    body += `\nEVENT DETAILS\n─────────────────────────────────────\n`;
-    if (eventName)     body += `Event Name  : ${eventName}\n`;
-    if (eventLocation) body += `Location    : ${eventLocation}\n`;
-    if (eventDate)     body += `Date        : ${eventDate}\n`;
-  }
-  body += `\n─────────────────────────────────────\nRoot & Fruit Integrity Index`;
+  const btn = document.getElementById('regSubmitBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<div class="loader"></div> Submitting...'; }
 
-  const subject = `Root & Fruit Registration — ${name}${org ? ' (' + org + ')' : ''}`;
-  window.location.href = `mailto:${REGISTRATION_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  // Auto-reply to registrant via FormSubmit.co (no backend required)
-  if (email) {
-    const firstName = name.split(' ')[0] || name;
-    fetch('https://formsubmit.co/ajax/' + REGISTRATION_EMAIL, {
+  // Send to the backend (Resend email + Firestore lead capture). Best-effort:
+  // we never trap the user — they're admitted whether or not delivery succeeds.
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({
-        name: name,
-        email: email,
-        organization: org || '',
-        tool: 'Root & Fruit Integrity Index',
-        _subject: subject,
-        _autoresponse: buildAutoReplyBody(firstName),
-        _replyto: email,
-        _captcha: 'false'
-      })
-    }).catch(() => { /* silent fail — registration still completes */ });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('Error ' + res.status));
+    showToast(data.emailed ? 'Registered — check your email!' : 'Registered!');
+  } catch (err) {
+    console.error('Registration failed:', err);
+    showToast('Registered — confirmation email may be delayed.');
+  } finally {
+    sessionStorage.setItem('rfRegistered', 'true');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-unlock"></i> Access Root & Fruit'; }
+    setTimeout(() => { document.getElementById('splashOverlay').classList.add('hidden'); }, 600);
   }
-
-  setTimeout(() => {
-    document.getElementById('splashOverlay').classList.add('hidden');
-  }, 600);
 }
 
 // ══════════════════════════════════════════════
