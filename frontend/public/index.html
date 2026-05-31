@@ -2969,8 +2969,15 @@ function copyReport() {
 function exportPDF() {
   const { jsPDF } = window.jspdf;
   const name = document.getElementById('nameInput').value || 'Unknown';
-  const total = calculate();
-  const { title } = getVerdict(total);
+  // Baseline = the AI's frozen read (canonical verdict); Adjusted = current live
+  // scores after community input + People's Choice. calculate() returns the live total.
+  const adjustedTotal = calculate();
+  const baselineTotal = baselineScores
+    ? baselineScores.root + baselineScores.branch + baselineScores.fruit - baselineScores.toxic + (baselineScores.peoplesChoice ? 5 : 0)
+    : adjustedTotal;
+  const { title: baseTitle } = getVerdict(baselineTotal);
+  const { title: adjTitle }  = getVerdict(adjustedTotal);
+  const hasAdj = adjustedTotal !== baselineTotal;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const W = 210, margin = 20;
@@ -2997,19 +3004,27 @@ function exportPDF() {
   doc.setTextColor(26,26,24); doc.setFont('helvetica','bold'); doc.setFontSize(16);
   doc.text(name, margin, y); y += 8;
   doc.setFontSize(10); doc.setFont('helvetica','normal'); doc.setTextColor(90,82,72);
-  doc.text(subjectType.toUpperCase() + ' · ' + title + ' · ' + total + '/57 pts', margin, y); y += 12;
+  doc.text(subjectType.toUpperCase() + ' · ' + baseTitle + ' · ' + baselineTotal + '/57 pts', margin, y); y += 12;
 
+  // Breakdown reflects the baseline (frozen) read so it matches the headline verdict.
+  // Community adjustments + People's Choice are summarised in the verdict block below.
+  const bsR = baselineScores?.root   ?? scores.root;
+  const bsB = baselineScores?.branch ?? scores.branch;
+  const bsF = baselineScores?.fruit  ?? scores.fruit;
+  const bsV = baselineScores?.vis    ?? scores.vis;
+  const bsT = baselineScores?.toxic  ?? scores.toxic;
   const sections = [
-    ['Root (Values)', scores.root, 25],
-    ['Branches (Advocacy)', scores.branch, 12],
-    ['Fruit (Outcomes)', scores.fruit, 15],
-    ['The Light (separate indicator)', scores.vis, 10],
-    ['Toxic Penalties', -scores.toxic, 0]
+    ['Root (Values)', bsR, 25],
+    ['Branches (Advocacy)', bsB, 12],
+    ['Fruit (Outcomes)', bsF, 15],
+    ['The Light (separate indicator)', bsV, 10],
+    ['Toxic Penalties', -bsT, 0]
   ];
-  if (pcAwarded) sections.push(["People's Choice", 5, 0]);
+  // In the manual flow (no AI baseline) the breakdown IS the live score, so show People's Choice here.
+  if (pcAwarded && !baselineScores) sections.push(["People's Choice", 5, 0]);
 
   doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(139,105,20);
-  doc.text('SCORE BREAKDOWN', margin, y); y += 6;
+  doc.text(hasAdj ? 'BASELINE SCORE BREAKDOWN' : 'SCORE BREAKDOWN', margin, y); y += 6;
   doc.setDrawColor(139,105,20); doc.line(margin, y, W-margin, y); y += 6;
 
   sections.forEach(([label, val, max]) => {
@@ -3025,8 +3040,20 @@ function exportPDF() {
   });
 
   y += 4;
-  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
-  doc.text('FINAL SCORE: ' + total + '/57 — ' + title, margin, y); y += 10;
+  doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  if (hasAdj) {
+    const diff = adjustedTotal - baselineTotal;
+    const sign = diff > 0 ? '+' : '';
+    doc.setTextColor(139,105,20);
+    doc.text('BASELINE VERDICT: ' + baselineTotal + '/57 — ' + baseTitle, margin, y); y += 6;
+    doc.setTextColor(...(diff > 0 ? [42,157,92] : [192,57,43]));
+    doc.text('ADJUSTED VERDICT: ' + adjustedTotal + '/57 — ' + adjTitle + '  (' + sign + diff + ' pts)', margin, y); y += 6;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(110,110,110);
+    doc.text('Adjusted reflects community assessment input; baseline is the Root & Fruit auto-audit.', margin, y); y += 10;
+  } else {
+    doc.setTextColor(50,50,50);
+    doc.text('FINAL SCORE: ' + baselineTotal + '/57 — ' + baseTitle, margin, y); y += 10;
+  }
 
   // ── Pagination + layout helpers ───────────────────────────────
   // jsPDF's doc.text does NOT auto-break pages; every block must check
@@ -3365,20 +3392,34 @@ function drawShareCard() {
   const canvas = document.getElementById('shareCardCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const W = 600, H = 330;
+  const W = 600;
+
+  const name = document.getElementById('nameInput').value || 'Unknown Subject';
+  const pcAwarded = !!document.getElementById('peoplesChoiceCB')?.checked;
+  const pathway = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
+
+  // Baseline = the AI's frozen read (canonical Root & Fruit verdict).
+  // Adjusted = current live scores after community input + People's Choice.
+  const baselineTotal = baselineScores
+    ? baselineScores.root + baselineScores.branch + baselineScores.fruit - baselineScores.toxic + (baselineScores.peoplesChoice ? 5 : 0)
+    : calculate();
+  const adjustedTotal = Math.max(0, scores.root + scores.branch + scores.fruit - scores.toxic + (pcAwarded ? 5 : 0));
+  const { title: baseTitle, color: baseCV } = getVerdict(baselineTotal);
+  const { title: adjTitle,  color: adjCV  } = getVerdict(adjustedTotal);
+
+  // Only split into two columns when community input actually moved the score.
+  const hasAdj = adjustedTotal !== baselineTotal;
+  const H = hasAdj ? 374 : 330;
   canvas.width = W; canvas.height = H;
 
-  const total = calculate();
-  const name = document.getElementById('nameInput').value || 'Unknown Subject';
-  const pathway = currentPathway === 'community' ? 'Community Leader' : 'Elected Official';
-  const { title, color } = getVerdict(total);
-
-  // Map CSS verdict colors to concrete hex for canvas
-  const vColor = (() => {
+  // Map CSS verdict colors to concrete hex for canvas.
+  const vColor = (cv) => {
     const m = { 'var(--green)':'#2a9d5c', '#6eddb5':'#4a9e6e', 'var(--blue)':'#2563a8',
                 'var(--gold)':'#8B6914', 'var(--orange)':'#c4620a', 'var(--red)':'#c0392b' };
-    return m[color] || '#8B6914';
-  })();
+    return m[cv] || '#8B6914';
+  };
+  const baseC = vColor(baseCV);
+  const adjC  = vColor(adjCV);
 
   const EGG='#F5F1E8', NAVY='#0D1B3E', GOLD='#8B6914', GOLD_B='#E8C96A',
         CREAM='#E8E2D4', INK='#1a1a18', DIM='#6B6258';
@@ -3407,42 +3448,81 @@ function drawShareCard() {
   // Name
   ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = INK;
   let nameFS = 28; ctx.font = `bold ${nameFS}px Arial`;
-  const maxNameW = W - 200;
-  while (ctx.measureText(name).width > maxNameW && nameFS > 15) { nameFS--; ctx.font = `bold ${nameFS}px Arial`; }
-  ctx.fillText(name, lx, 62);
-  // Verdict
-  ctx.fillStyle = vColor; ctx.font = 'bold 17px Arial';
-  ctx.fillText(title, lx, 62 + nameFS + 8);
+  while (ctx.measureText(name).width > W-48 && nameFS > 15) { nameFS--; ctx.font = `bold ${nameFS}px Arial`; }
+  ctx.fillText(name, lx, 56);
 
-  // Score circle (right)
-  const cx = W - 86, cy = 150;
-  ctx.beginPath(); ctx.arc(cx, cy, 56, 0, Math.PI*2);
-  ctx.strokeStyle = CREAM; ctx.lineWidth = 8; ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, 56, -Math.PI/2, -Math.PI/2 + (total/57)*Math.PI*2);
-  ctx.strokeStyle = vColor; ctx.lineWidth = 8; ctx.lineCap = 'round'; ctx.stroke();
-  ctx.lineCap = 'butt';
-  ctx.fillStyle = vColor; ctx.font = 'bold 36px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(total, cx, cy - 6);
-  ctx.fillStyle = DIM; ctx.font = 'bold 12px Arial';
-  ctx.fillText('/ 57', cx, cy + 18);
+  const midX = hasAdj ? W/2 : W;
+  // Vertical divider between the two verdict columns
+  if (hasAdj) {
+    ctx.strokeStyle = CREAM; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(midX, 96); ctx.lineTo(midX, H-44); ctx.stroke();
+  }
 
-  // Score bars
-  const barY = 150, barW = 260, bx = lx + 78;
+  // Shared column layout
+  const LABEL_Y = 100, VERDICT_Y = 112, SCORE_Y = 178, PILL_Y = 190;
+  const BAR_Y = hasAdj ? PILL_Y + 30 : 150;
+
+  // ── BASELINE column ──
+  ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textBaseline = 'top';
+  ctx.fillText(hasAdj ? 'BASELINE VERDICT' : 'VERDICT', lx, LABEL_Y);
+  ctx.fillStyle = baseC; ctx.font = 'bold 16px Arial';
+  ctx.fillText(baseTitle, lx, VERDICT_Y);
+  ctx.fillStyle = baseC; ctx.font = 'bold 52px Arial'; ctx.textBaseline = 'alphabetic';
+  const baseScoreW = ctx.measureText(String(baselineTotal)).width;
+  ctx.fillText(String(baselineTotal), lx, SCORE_Y);
+  ctx.fillStyle = DIM; ctx.font = 'bold 16px Arial';
+  ctx.fillText(' / 57', lx + baseScoreW + 3, SCORE_Y);
+  ctx.textBaseline = 'top';
+
+  // ── ADJUSTED column (only when it differs) ──
+  if (hasAdj) {
+    const ax = midX + lx;
+    ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textBaseline = 'top';
+    ctx.fillText('ADJUSTED VERDICT', ax, LABEL_Y);
+    ctx.fillStyle = adjC; ctx.font = 'bold 16px Arial';
+    ctx.fillText(adjTitle, ax, VERDICT_Y);
+    ctx.fillStyle = adjC; ctx.font = 'bold 52px Arial'; ctx.textBaseline = 'alphabetic';
+    const adjScoreW = ctx.measureText(String(adjustedTotal)).width;
+    ctx.fillText(String(adjustedTotal), ax, SCORE_Y);
+    ctx.fillStyle = DIM; ctx.font = 'bold 16px Arial';
+    ctx.fillText(' / 57', ax + adjScoreW + 3, SCORE_Y);
+    ctx.textBaseline = 'top';
+
+    // Delta pill below the adjusted score
+    const diff = adjustedTotal - baselineTotal;
+    const sign = diff > 0 ? '+' : '';
+    const pillTxt = `${sign}${diff} pts`;
+    ctx.font = 'bold 10px Arial';
+    const pw = ctx.measureText(pillTxt).width + 18, pillH = 20;
+    ctx.fillStyle = diff > 0 ? 'rgba(42,157,92,0.15)' : 'rgba(192,57,43,0.15)';
+    ctx.beginPath(); ctx.roundRect(ax, PILL_Y, pw, pillH, 10); ctx.fill();
+    ctx.strokeStyle = diff > 0 ? '#2a9d5c' : '#c0392b'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(ax, PILL_Y, pw, pillH, 10); ctx.stroke();
+    ctx.fillStyle = diff > 0 ? '#2a9d5c' : '#c0392b';
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    ctx.fillText(pillTxt, ax + pw/2, PILL_Y + pillH/2);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  }
+
+  // ── Score bars (baseline section scores — the frozen read) ──
+  const bX = lx;
+  const bW = hasAdj ? (midX - lx*2 - 8) : (W - 180);
+  const bH = 5;
   const cats = [
-    { label: 'ROOT',     val: scores.root,   max: 25, c: '#8B6914' },
-    { label: 'BRANCHES', val: scores.branch, max: 12, c: '#2563a8' },
-    { label: 'FRUIT',    val: scores.fruit,  max: 15, c: '#2a9d5c' },
+    { label: 'ROOT /25',     val: baselineScores?.root   ?? scores.root,   max: 25, c: '#8B6914' },
+    { label: 'BRANCHES /12', val: baselineScores?.branch ?? scores.branch, max: 12, c: '#2563a8' },
+    { label: 'FRUIT /15',    val: baselineScores?.fruit  ?? scores.fruit,  max: 15, c: '#2a9d5c' },
   ];
-  if (scores.toxic > 0) cats.push({ label: 'TOXIC', val: scores.toxic, max: 8, c: '#c0392b', neg: true });
+  const toxicVal = baselineScores?.toxic ?? scores.toxic;
+  if (toxicVal > 0) cats.push({ label: `TOXIC −${toxicVal}`, val: toxicVal, max: 8, c: '#c0392b' });
   cats.forEach((cat, i) => {
-    const y = barY + i * 30;
-    ctx.fillStyle = GOLD; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText(cat.label, lx, y + 7);
-    ctx.fillStyle = CREAM; ctx.beginPath(); ctx.roundRect(bx, y, barW, 13, 6.5); ctx.fill();
-    const filled = Math.min(1, cat.val/cat.max) * barW;
-    if (filled > 0) { ctx.fillStyle = cat.c; ctx.beginPath(); ctx.roundRect(bx, y, filled, 13, 6.5); ctx.fill(); }
-    ctx.fillStyle = INK; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'right';
-    ctx.fillText(`${cat.neg ? '−' : ''}${cat.val}/${cat.max}`, bx + barW + 36, y + 7);
+    const by = BAR_Y + i * 22;
+    ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(cat.label, bX, by + 2);
+    ctx.fillStyle = CREAM; ctx.beginPath(); ctx.roundRect(bX+72, by-2, bW, bH, 2.5); ctx.fill();
+    if (cat.val > 0) { ctx.fillStyle = cat.c; ctx.beginPath(); ctx.roundRect(bX+72, by-2, bW*(Math.min(cat.val,cat.max)/cat.max), bH, 2.5); ctx.fill(); }
+    ctx.fillStyle = INK; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'right';
+    ctx.fillText(`${cat.val}/${cat.max}`, bX+72+bW+24, by + 2);
     ctx.textAlign = 'left';
   });
 
