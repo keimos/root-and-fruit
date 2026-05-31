@@ -3028,25 +3028,119 @@ function exportPDF() {
   doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(50,50,50);
   doc.text('FINAL SCORE: ' + total + '/57 — ' + title, margin, y); y += 10;
 
-  if (lastAnalysisData?.summary) {
-    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(50,50,50);
-    doc.text('EXECUTIVE SUMMARY', margin, y); y += 5;
-    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
-    const lines = doc.splitTextToSize(lastAnalysisData.summary, W-margin*2);
-    doc.text(lines, margin, y); y += lines.length * 5 + 6;
+  // ── Pagination + layout helpers ───────────────────────────────
+  // jsPDF's doc.text does NOT auto-break pages; every block must check
+  // remaining space and addPage() (re-painting the eggshell bg) first.
+  const BOTTOM = 282;
+  function newPage() { doc.addPage(); doc.setFillColor(245,241,232); doc.rect(0,0,W,297,'F'); y = margin; }
+  function ensure(h) { if (y + h > BOTTOM) newPage(); }
+  function sectionHeading(label) {
+    ensure(14);
+    doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(139,105,20);
+    doc.text(label, margin, y); y += 3;
+    doc.setDrawColor(139,105,20); doc.line(margin, y, W-margin, y); y += 6;
+  }
+  function paragraph(text, size = 9, color = [80,80,80], indent = 0) {
+    if (!text) return;
+    doc.setFont('helvetica','normal'); doc.setFontSize(size); doc.setTextColor(...color);
+    const lines = doc.splitTextToSize(String(text), W - margin*2 - indent);
+    lines.forEach(ln => { ensure(size * 0.5 + 1); doc.text(ln, margin + indent, y); y += size * 0.5 + 1; });
+  }
+  // A scored criterion row: bold colored label/mark, then wrapped reasoning.
+  function criterion(mark, markColor, label, reasoning) {
+    ensure(8);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(...markColor);
+    doc.text(`${mark}  ${label}`, margin, y); y += 5;
+    if (reasoning) { paragraph(reasoning, 9, [70,70,70], 6); }
+    y += 2;
+  }
+  const GREEN = [42,157,92], RED = [192,57,43], GOLD = [139,105,20];
+  const d = lastAnalysisData;
+
+  if (d?.summary) {
+    sectionHeading('EXECUTIVE SUMMARY');
+    paragraph(d.summary); y += 4;
   }
 
-  if (lastAnalysisData?.historicalBackground) {
-    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(50,50,50);
-    doc.text('HISTORICAL BACKGROUND', margin, y); y += 5;
-    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
-    const lines = doc.splitTextToSize(lastAnalysisData.historicalBackground, W-margin*2);
-    if (y + lines.length*5 > 280) { doc.addPage(); doc.setFillColor(245,241,232); doc.rect(0,0,W,297,'F'); y = margin; }
-    doc.text(lines, margin, y); y += lines.length * 5 + 6;
+  if (d?.historicalBackground) {
+    sectionHeading('HISTORICAL BACKGROUND');
+    paragraph(d.historicalBackground); y += 4;
   }
 
-  doc.setFontSize(8); doc.setTextColor(154,144,128);
-  doc.text('Root & Fruit Integrity Index™ · Cast Your Net Media and Technologies · rootandfruit.app', W/2, 290, { align:'center' });
+  // Key Actors — supporters / opponents / funders
+  if (d?.supporters?.length || d?.opponents?.length || d?.funders?.length) {
+    sectionHeading('KEY ACTORS');
+    const isCand = subjectType === 'candidate';
+    if (d.supporters?.length) { paragraph((isCand ? 'Supporters: ' : 'Proponents: ') + d.supporters.join(', '), 9, [60,60,60]); }
+    if (d.opponents?.length)  { paragraph('Opponents: ' + d.opponents.join(', '), 9, [60,60,60]); }
+    if (d.funders?.length)    { paragraph('Funders & Backers: ' + d.funders.join(', '), 9, [60,60,60]); }
+    y += 4;
+  }
+
+  const isCandidate = subjectType === 'candidate';
+  const rootLabels = ['Liberty & Anti-Carceral','Justice & Reparations','Solidarity & Agency','Safety & Housing','Fiscal Integrity'];
+  const branchLabels = isCandidate
+    ? ['Economic Transfer','Institutional Protection','Housing & Homelessness','Criminal Justice Reform','Intergenerational Wealth','Education Reform']
+    : ['Economic Transfer Mechanisms','Institutional Protection','Housing Solutions','Justice Reform Mechanisms','Intergenerational Wealth Structures','Education Reform Provisions'];
+  const fruitLabels = ['Economic Transfer','Institutional Protection','Housing Mitigation','Criminal Justice','Intergenerational Wealth'];
+  const toxicLabels = isCandidate ? ['The Gatekeeper','The Plantation','The Betrayal'] : ['The Carve-Out','The Trojan Horse','The Unfunded Mandate'];
+
+  if (d?.root?.length) {
+    sectionHeading('THE ROOT — VALUES');
+    d.root.forEach((it, i) => criterion(it.met ? '[YES]' : '[NO]', it.met ? GREEN : RED, rootLabels[i] || 'Criterion ' + (i+1), it.reasoning));
+    y += 2;
+  }
+  if (d?.branches?.length) {
+    sectionHeading('THE BRANCHES — ADVOCACY');
+    d.branches.forEach((it, i) => criterion(it.met ? '[YES]' : '[NO]', it.met ? GREEN : RED, branchLabels[i] || 'Criterion ' + (i+1), it.reasoning));
+    y += 2;
+  }
+  if (d?.fruit?.length) {
+    sectionHeading('THE FRUIT — OUTCOMES');
+    d.fruit.forEach((it, i) => {
+      const s = it.score || 0;
+      criterion(`[${s}/3]`, s === 3 ? GREEN : s > 0 ? GOLD : RED, fruitLabels[i] || 'Criterion ' + (i+1), it.reasoning);
+    });
+    y += 2;
+  }
+  if (d?.visibility) {
+    sectionHeading('THE LIGHT — VISIBILITY (separate indicator)');
+    criterion(`[${d.visibility.score ?? scores.vis}/10]`, GOLD, 'Information Availability', d.visibility.reasoning);
+    y += 2;
+  }
+  if (d?.toxic?.some(t => t.present)) {
+    sectionHeading('TOXIC SOIL — PENALTIES');
+    const toxicPts = [3,4,8];
+    d.toxic.forEach((it, i) => { if (it.present) criterion(`−${toxicPts[i]}`, RED, toxicLabels[i], it.reasoning); });
+    y += 2;
+  }
+
+  // Sources & citations
+  if (d?.sources?.length) {
+    sectionHeading('SOURCES & CITATIONS');
+    d.sources.forEach(s => {
+      ensure(8);
+      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(60,60,60);
+      const head = `• ${s.title || 'Source'}${s.category ? ' [' + s.category + ']' : ''}${s.biasRating ? ' · Bias ' + s.biasRating + '/10' : ''}`;
+      doc.splitTextToSize(head, W - margin*2).forEach(ln => { ensure(4.5); doc.text(ln, margin, y); y += 4.5; });
+      if (s.url && s.url !== 'N/A') {
+        doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(50,80,180);
+        doc.splitTextToSize(s.url, W - margin*2 - 4).forEach(ln => { ensure(4); doc.text(ln, margin + 4, y); y += 4; });
+      }
+      y += 1.5;
+    });
+  }
+
+  if (!d) paragraph('No analysis has been run yet — run an Auto-Analyze to populate the full report.', 10, [120,120,120]);
+
+  // Footer on every page
+  const pages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(8); doc.setTextColor(154,144,128);
+    doc.text('Root & Fruit Integrity Index™ · Cast Your Net Media and Technologies · rootandfruit.app', W/2, 290, { align:'center' });
+    doc.text(`Page ${p} of ${pages}`, W-margin, 290, { align:'right' });
+  }
 
   doc.save(`Root-Fruit-${name.replace(/\s+/g,'-')}.pdf`);
   showToast('PDF exported!');
