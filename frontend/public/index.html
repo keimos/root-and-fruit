@@ -3427,9 +3427,9 @@ function drawShareCard() {
   const { title: baseTitle, color: baseCV } = getVerdict(baselineTotal);
   const { title: adjTitle,  color: adjCV  } = getVerdict(adjustedTotal);
 
-  // Only split into two columns when community input actually moved the score.
+  // Baseline + adjusted are ALWAYS shown as two side-by-side circular gauges.
   const hasAdj = adjustedTotal !== baselineTotal;
-  const H = hasAdj ? 374 : 330;
+  const H = 380;
   canvas.width = W; canvas.height = H;
 
   // Map CSS verdict colors to concrete hex for canvas.
@@ -3471,64 +3471,57 @@ function drawShareCard() {
   while (ctx.measureText(name).width > W-48 && nameFS > 15) { nameFS--; ctx.font = `bold ${nameFS}px Arial`; }
   ctx.fillText(name, lx, 56);
 
-  const midX = hasAdj ? W/2 : W;
-  // Vertical divider between the two verdict columns
-  if (hasAdj) {
-    ctx.strokeStyle = CREAM; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(midX, 96); ctx.lineTo(midX, H-44); ctx.stroke();
+  // ── Two circular verdict gauges, always shown (baseline left, adjusted right) ──
+  // Each ring fills to score/57 and is tinted with its own verdict-tier color, so
+  // the two verdicts read as distinct colored progress rings at a glance.
+  const cxL = 158, cxR = 442, cy = 162, ringR = 50, ringLW = 9;
+  const BAR_Y = 262;
+
+  function verdictGauge(cx, label, score, title, color) {
+    // Label above the ring
+    ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(label, cx, 100);
+    // Track ring
+    ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, Math.PI*2);
+    ctx.strokeStyle = CREAM; ctx.lineWidth = ringLW; ctx.stroke();
+    // Progress arc (proportion of 57), tinted by verdict color
+    ctx.beginPath(); ctx.arc(cx, cy, ringR, -Math.PI/2, -Math.PI/2 + Math.min(1, score/57)*Math.PI*2);
+    ctx.strokeStyle = color; ctx.lineWidth = ringLW; ctx.lineCap = 'round'; ctx.stroke(); ctx.lineCap = 'butt';
+    // Center score
+    ctx.fillStyle = color; ctx.font = 'bold 32px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(score), cx, cy - 5);
+    ctx.fillStyle = DIM; ctx.font = 'bold 11px Arial';
+    ctx.fillText('/ 57', cx, cy + 17);
+    // Verdict title below the ring (auto-shrink to fit its half)
+    let tfs = 13; ctx.font = `bold ${tfs}px Arial`;
+    while (ctx.measureText(title).width > 250 && tfs > 9) { tfs--; ctx.font = `bold ${tfs}px Arial`; }
+    ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(title, cx, cy + ringR + 14);
   }
 
-  // Shared column layout
-  const LABEL_Y = 100, VERDICT_Y = 112, SCORE_Y = 178, PILL_Y = 190;
-  // Bars always sit below the big score number. In single-column mode the score
-  // lives on the left at SCORE_Y, so bars must clear it (was overlapping at 150).
-  const BAR_Y = hasAdj ? PILL_Y + 30 : 200;
+  verdictGauge(cxL, 'BASELINE VERDICT', baselineTotal, baseTitle, baseC);
+  verdictGauge(cxR, 'ADJUSTED VERDICT', adjustedTotal, adjTitle, adjC);
 
-  // ── BASELINE column ──
-  ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textBaseline = 'top';
-  ctx.fillText(hasAdj ? 'BASELINE VERDICT' : 'VERDICT', lx, LABEL_Y);
-  ctx.fillStyle = baseC; ctx.font = 'bold 16px Arial';
-  ctx.fillText(baseTitle, lx, VERDICT_Y);
-  ctx.fillStyle = baseC; ctx.font = 'bold 52px Arial'; ctx.textBaseline = 'alphabetic';
-  const baseScoreW = ctx.measureText(String(baselineTotal)).width;
-  ctx.fillText(String(baselineTotal), lx, SCORE_Y);
-  ctx.fillStyle = DIM; ctx.font = 'bold 16px Arial';
-  ctx.fillText(' / 57', lx + baseScoreW + 3, SCORE_Y);
-  ctx.textBaseline = 'top';
-
-  // ── ADJUSTED column (only when it differs) ──
+  // Delta pill centered between the gauges (only when the score actually moved)
   if (hasAdj) {
-    const ax = midX + lx;
-    ctx.fillStyle = GOLD; ctx.font = 'bold 8px Arial'; ctx.textBaseline = 'top';
-    ctx.fillText('ADJUSTED VERDICT', ax, LABEL_Y);
-    ctx.fillStyle = adjC; ctx.font = 'bold 16px Arial';
-    ctx.fillText(adjTitle, ax, VERDICT_Y);
-    ctx.fillStyle = adjC; ctx.font = 'bold 52px Arial'; ctx.textBaseline = 'alphabetic';
-    const adjScoreW = ctx.measureText(String(adjustedTotal)).width;
-    ctx.fillText(String(adjustedTotal), ax, SCORE_Y);
-    ctx.fillStyle = DIM; ctx.font = 'bold 16px Arial';
-    ctx.fillText(' / 57', ax + adjScoreW + 3, SCORE_Y);
-    ctx.textBaseline = 'top';
-
-    // Delta pill below the adjusted score
     const diff = adjustedTotal - baselineTotal;
     const sign = diff > 0 ? '+' : '';
     const pillTxt = `${sign}${diff} pts`;
-    ctx.font = 'bold 10px Arial';
-    const pw = ctx.measureText(pillTxt).width + 18, pillH = 20;
+    ctx.font = 'bold 11px Arial';
+    const pw = ctx.measureText(pillTxt).width + 18, pillH = 22, px = 300 - pw/2, py = cy - pillH/2;
     ctx.fillStyle = diff > 0 ? 'rgba(42,157,92,0.15)' : 'rgba(192,57,43,0.15)';
-    ctx.beginPath(); ctx.roundRect(ax, PILL_Y, pw, pillH, 10); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(px, py, pw, pillH, 11); ctx.fill();
     ctx.strokeStyle = diff > 0 ? '#2a9d5c' : '#c0392b'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(ax, PILL_Y, pw, pillH, 10); ctx.stroke();
+    ctx.beginPath(); ctx.roundRect(px, py, pw, pillH, 11); ctx.stroke();
     ctx.fillStyle = diff > 0 ? '#2a9d5c' : '#c0392b';
     ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-    ctx.fillText(pillTxt, ax + pw/2, PILL_Y + pillH/2);
+    ctx.fillText(pillTxt, 300, cy);
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   }
 
   // ── Score bars (baseline section scores — the frozen read) ──
   const bX = lx;
-  const bW = hasAdj ? (midX - lx*2 - 8) : (W - 180);
+  const bW = W - 180;
   const bH = 5;
   const cats = [
     { label: 'ROOT /25',     val: baselineScores?.root   ?? scores.root,   max: 25, c: '#8B6914' },
