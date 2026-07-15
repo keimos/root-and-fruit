@@ -25,6 +25,9 @@ const anthropic = process.env.ANTHROPIC_API_KEY
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const REGISTRATION_EMAIL = process.env.REGISTRATION_EMAIL || 'rootandfruit@wetheanvil.org';
 const REGISTRATION_FROM = process.env.REGISTRATION_FROM || 'Root & Fruit <onboarding@resend.dev>';
+// Donation CTA link for the registrant auto-reply. If unset, the auto-reply
+// omits the donation line entirely rather than shipping a placeholder.
+const DONATION_URL = process.env.DONATION_URL || '';
 const AUTO_REPLY_SUBJECT = "Welcome to Root & Fruit: You're Part of Something Bigger";
 
 async function sendResendEmail({ to, subject, text, replyTo }) {
@@ -50,6 +53,9 @@ async function sendResendEmail({ to, subject, text, replyTo }) {
 }
 
 function buildAutoReplyBody(firstName) {
+  const donationLine = DONATION_URL
+    ? `SUPPORT THE ANVIL INSTITUTE: ${DONATION_URL}\n\n`
+    : '';
   return `Dear ${firstName},
 
 Welcome to the Root & Fruit Integrity Index. You just joined something that matters. Root & Fruit was built on a simple conviction: by their fruits, shall you know them. Not their rhetoric. Their record.
@@ -58,9 +64,7 @@ You're now connected to a tool rooted in 240 years of Free African civic traditi
 
 Root & Fruit, its scoring framework, the audit reports, the community assessment: all of it was designed to bring information right to the hands of the people and we need your support to keep it going, growing and accessible without compromise. If you believe this kind of tool should exist, please consider making a donation of your choosing to help us to continue building tools that meet the needs of our community.
 
-SUPPORT THE ANVIL INSTITUTE: [INSERT DONATION LINK]
-
-The Anvil Institute is a 501(c)(3) nonprofit charitable organization. Your donation is tax-deductible to the extent permitted by law.
+${donationLine}The Anvil Institute is a 501(c)(3) nonprofit charitable organization. Your donation is tax-deductible to the extent permitted by law.
 
 Your support keeps this work in the hands of the people, not the politicians.
 
