@@ -240,6 +240,7 @@ anthropic.messages.stream({
 | `RESEND_API_KEY`        | no      | Enables `/api/register` email. If missing, registrations are still stored in Firestore but no email is sent (logged as a warning). Mount from Secret Manager in Cloud Run — never plaintext. |
 | `REGISTRATION_EMAIL`    | no      | Inbox that receives new-registration notifications. Defaults to `rootandfruit@wetheanvil.org`. |
 | `REGISTRATION_FROM`     | no      | Resend `from` sender. Defaults to the `onboarding@resend.dev` sandbox (delivers only to the Resend account owner) — **set this to a verified domain sender (e.g. `Root & Fruit <noreply@rootandfruit.app>`) in production.** |
+| `DONATION_URL`          | no      | Donation CTA link in the registrant auto-reply email. If unset, the auto-reply omits the donation line entirely (rather than shipping a placeholder). Set to the live donation URL (e.g. `https://anvilinstitute.org/give`) in production. |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
 | `ALLOWED_ORIGIN`        | no      | CORS origin allowlist. Defaults to `*`.                                                      |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
