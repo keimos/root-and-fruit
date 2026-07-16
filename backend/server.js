@@ -17,6 +17,40 @@ const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
+// ── Transient-error retry ──────────────────────────────
+// Anthropic occasionally returns 429 (rate limit) or 529 (fleet overloaded),
+// plus transient 5xx / network errors. These are load-driven and unrelated to
+// the request content, so the right response is exponential backoff + retry.
+// The SDK already retries a couple times internally; this outer loop covers the
+// cases where the fleet is overloaded for longer than the SDK's own window.
+const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+
+function isRetryable(err) {
+  const status = err?.status ?? err?.response?.status;
+  if (status != null) return RETRYABLE_STATUS.has(status);
+  // No status → network/connection error (ECONNRESET, timeouts, etc.).
+  return true;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function withRetry(fn, { retries = 3, baseDelay = 500, label = 'anthropic' } = {}) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt += 1;
+      if (attempt > retries || !isRetryable(err)) throw err;
+      // Exponential backoff with jitter: ~0.5s, ~1s, ~2s (+/- up to baseDelay).
+      const delay = baseDelay * 2 ** (attempt - 1) + Math.random() * baseDelay;
+      const status = err?.status ?? err?.response?.status ?? 'network';
+      console.warn(`${label} retry ${attempt}/${retries} after ${status} — waiting ${Math.round(delay)}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
 // ── Email (Resend) ─────────────────────────────────────
 // RESEND_API_KEY enables registration emails. REGISTRATION_FROM must be a
 // verified sender on your Resend domain in production; the resend.dev sandbox
@@ -114,24 +148,25 @@ app.post('/api/analyze', async (req, res) => {
     : system;
 
   try {
-    const stream = anthropic.messages.stream({
-      model: MODEL,
-      max_tokens,
-      system: systemBlocks,
-      messages,
-      thinking: { type: 'adaptive' },
-      // Low effort trims thinking depth/tokens — this is a structured
-      // extract-and-verify task, not frontier reasoning. (effort errors on
-      // Haiku 4.5; only set it on Opus/Sonnet tiers.)
-      ...(/haiku/i.test(MODEL) ? {} : { output_config: { effort: 'low' } }),
-      // Fewer search rounds = less sequential wall-clock. Each round is a
-      // network fetch + model re-reason; 2 covers verification without the tail.
-      tools: [
-        { type: 'web_search_20260209', name: 'web_search', max_uses: 2 }
-      ]
-    });
-
-    const message = await stream.finalMessage();
+    const message = await withRetry(() => {
+      const stream = anthropic.messages.stream({
+        model: MODEL,
+        max_tokens,
+        system: systemBlocks,
+        messages,
+        thinking: { type: 'adaptive' },
+        // Low effort trims thinking depth/tokens — this is a structured
+        // extract-and-verify task, not frontier reasoning. (effort errors on
+        // Haiku 4.5; only set it on Opus/Sonnet tiers.)
+        ...(/haiku/i.test(MODEL) ? {} : { output_config: { effort: 'low' } }),
+        // Fewer search rounds = less sequential wall-clock. Each round is a
+        // network fetch + model re-reason; 2 covers verification without the tail.
+        tools: [
+          { type: 'web_search_20260209', name: 'web_search', max_uses: 2 }
+        ]
+      });
+      return stream.finalMessage();
+    }, { label: 'analyze' });
 
     const usage = message.usage || {};
     console.log('Audit complete:', {
@@ -162,7 +197,7 @@ app.post('/api/search', async (req, res) => {
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
 
   try {
-    const message = await anthropic.messages.create({
+    const message = await withRetry(() => anthropic.messages.create({
       model: MODEL,
       max_tokens,
       system,
@@ -170,7 +205,7 @@ app.post('/api/search', async (req, res) => {
       tools: [
         { type: 'web_search_20260209', name: 'web_search', max_uses }
       ]
-    });
+    }), { label: 'search' });
     res.json(message);
   } catch (err) {
     console.error('Search error:', err);
@@ -343,3 +378,6 @@ if (require.main === module) {
 }
 
 module.exports = app;
+// Expose pure internals for unit testing without booting the listener.
+module.exports.withRetry = withRetry;
+module.exports.isRetryable = isRetryable;

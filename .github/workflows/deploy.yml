@@ -1,0 +1,108 @@
+name: Deploy to Cloud Run
+
+# Runs on every push to main (i.e. after a PR merges). Deploys BACKEND FIRST,
+# reads back its Cloud Run URL, then deploys the FRONTEND with that URL wired
+# into BACKEND_URL. This order is mandatory: the frontend bakes nothing at build
+# time and reads BACKEND_URL at runtime, so it cannot deploy until the backend
+# URL is known.
+#
+# Auth is keyless via Workload Identity Federation — no service-account JSON key
+# lives in GitHub. App secrets (ANTHROPIC_API_KEY, RESEND_API_KEY) live in GCP
+# Secret Manager and are attached with --set-secrets; the workflow never sees
+# their values.
+#
+# ─── One-time setup (see the checklist printed at the bottom of this file) ───
+# Configure these as GitHub → Settings → Secrets and variables → Actions → Variables:
+#   GCP_PROJECT_ID     e.g. root-and-fruit-app
+#   GCP_REGION         e.g. us-central1
+#   GCP_WIF_PROVIDER   projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+#   GCP_DEPLOY_SA      deploy-sa@<project>.iam.gserviceaccount.com
+# Optional variables (leave unset to accept the app's built-in defaults):
+#   ANTHROPIC_MODEL, REGISTRATION_EMAIL, REGISTRATION_FROM, DONATION_URL,
+#   ALLOWED_ORIGIN, APP_VERSION
+
+on:
+  push:
+    branches: [main]
+
+# Never run two deploys concurrently — a second merge waits for the first.
+concurrency:
+  group: deploy-cloud-run
+  cancel-in-progress: false
+
+env:
+  BACKEND_SERVICE: root-and-fruit-backend
+  FRONTEND_SERVICE: root-and-fruit-frontend
+
+jobs:
+  deploy:
+    name: Deploy backend then frontend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # checkout
+      id-token: write       # required for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Backend ───────────────────────────────────────────────────────────
+      # Cloud Build builds backend/Dockerfile from source and deploys it.
+      # Secrets are mounted from Secret Manager (never passed as plaintext env).
+      # GOOGLE_CLOUD_PROJECT is injected by Cloud Run automatically — not set here.
+      - name: Deploy backend
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE" \
+            --source ./backend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 600Mi \
+            --max-instances 10 \
+            --timeout 600 \
+            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+
+      - name: Capture backend URL
+        id: backend
+        run: |
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "Backend deployed at $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # ── Frontend ──────────────────────────────────────────────────────────
+      # Depends on the backend URL from the previous step. BACKEND_URL is read at
+      # request time by frontend/server.js and injected into window.__RF_CONFIG__.
+      - name: Deploy frontend
+        run: |
+          gcloud run deploy "$FRONTEND_SERVICE" \
+            --source ./frontend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 256Mi \
+            --max-instances 5 \
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deploy complete :rocket:"
+            echo ""
+            echo "- **Backend:** ${{ steps.backend.outputs.url }}"
+            echo "- **Frontend:** deployed with BACKEND_URL wired to the above"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

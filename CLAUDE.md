@@ -18,7 +18,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`.
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
 - **Storage:** Firestore Native, three collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), and `registrations` (append-only splash-registration leads).
-- **Deploy:** Designed for two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **No CI/CD or infra-as-code is checked in** — the repo ships application code only.
+- **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** under `.github/workflows/` (`ci.yml` on PRs, `deploy.yml` on merge to `main`, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflows are the reference path, not a hard dependency.
 
 ---
 
@@ -26,8 +26,15 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 
 ```
 root-and-fruit/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml        ← PR checks: backend tests + Docker build (no deploy)
+│       └── deploy.yml    ← push-to-main → Cloud Run deploy (WIF, backend then frontend)
 ├── backend/
 │   ├── server.js         ← Express API: /api/analyze, /api/search, /api/register, /api/audits, /api/share, /health
+│   ├── test/
+│   │   ├── server.test.js  ← node:test HTTP integration (routing/validation/no-key guards)
+│   │   └── retry.test.js   ← node:test unit tests for the Anthropic retry helper
 │   ├── Dockerfile
 │   └── package.json
 ├── frontend/
@@ -279,7 +286,7 @@ The short system message passed to `/api/analyze` (in `autoAnalyze`) — the one
 
 ## Deployment
 
-There is **no CI/CD or infra-as-code in this repo**. Deployment is whatever the operator wires up externally — typically two stateless containers built from `backend/Dockerfile` and `frontend/Dockerfile` and run on a Node-friendly platform (Cloud Run, Fly, Render, ECS, a plain VM, …).
+Deployment targets **two stateless containers** (`root-and-fruit-backend`, `root-and-fruit-frontend`) built from `backend/Dockerfile` and `frontend/Dockerfile`, run on a Node-friendly platform (Cloud Run, Fly, Render, ECS, a plain VM, …). GitHub Actions CI/CD to Cloud Run **is now checked in** (see below); the workflows are the reference deploy path, but the app itself is platform-agnostic and can still be deployed by hand anywhere that runs a Node container.
 
 The non-negotiable wiring:
 
@@ -288,7 +295,37 @@ The non-negotiable wiring:
 3. Deploy the **frontend** with `BACKEND_URL` pointing at the backend's public URL. The frontend image carries no build-time config — `BACKEND_URL` is read at request time and injected into HTML via `frontend/server.js`.
 4. (Optional) Tighten CORS by setting `ALLOWED_ORIGIN` on the backend to the frontend's public URL.
 
-If you re-introduce CI/CD or Terraform later, keep the build order constraint in mind: the frontend deploy depends on the backend's URL, so the two cannot be parallelized.
+**Build order is a hard constraint** regardless of how you deploy: the frontend deploy depends on the backend's URL, so the two cannot be parallelized. The backend must be deployed (and its URL captured) before the frontend.
+
+### CI/CD — GitHub Actions → Cloud Run
+
+Two workflows live under `.github/workflows/`:
+
+| Workflow | Trigger | Does |
+|----------|---------|------|
+| `ci.yml` | pull request → `main` | Runs the backend test suite (`npm test`) and builds both Docker images as a compile-check. **No deploy, no GCP access, no secrets.** Unreviewed code never reaches production. |
+| `deploy.yml` | push → `main` (i.e. after a merge) | Authenticates to GCP **keyless via Workload Identity Federation** (no SA JSON key in GitHub), then Cloud Run **source-deploys** the backend, reads back its URL, and deploys the frontend with `BACKEND_URL` wired to it. A `concurrency` group serializes deploys so two quick merges can't race. |
+
+Design decisions baked into the workflows:
+
+- **Keyless auth (WIF).** `deploy.yml` requests an OIDC token (`permissions: id-token: write`) and impersonates a deploy service account via a workload identity provider locked to this repo. **No long-lived credential is stored in GitHub.**
+- **App secrets stay in Secret Manager.** `ANTHROPIC_API_KEY` and `RESEND_API_KEY` are attached with `--set-secrets` (`anthropic-api-key:latest`, `resend-api-key:latest`); the workflow never sees their values. `GOOGLE_CLOUD_PROJECT` is injected by Cloud Run automatically and is **not** set in the workflow.
+- **Cloud Run source deploy.** `gcloud run deploy --source` builds each image with Cloud Build from the Dockerfile — no Artifact Registry wiring by hand, fitting the app's no-build-step design.
+- **Backend deploy flags** encode the documented shape: `--memory 600Mi --max-instances 10 --timeout 600`. **Frontend:** `--memory 256Mi --max-instances 5`.
+
+Configuration lives in **GitHub repo variables** (Settings → Secrets and variables → Actions → Variables), not secrets — WIF means **zero secrets are stored in GitHub**:
+
+| Variable | Purpose |
+|----------|---------|
+| `GCP_PROJECT_ID` | Target project (e.g. `root-and-fruit-app`). |
+| `GCP_REGION` | Cloud Run region (e.g. `us-central1`). |
+| `GCP_WIF_PROVIDER` | Full workload-identity-provider resource name. |
+| `GCP_DEPLOY_SA` | Deploy service-account email the workflow impersonates. |
+| *(optional)* `ANTHROPIC_MODEL`, `REGISTRATION_EMAIL`, `REGISTRATION_FROM`, `DONATION_URL`, `ALLOWED_ORIGIN`, `APP_VERSION` | Passed through as env vars only when set; unset → the app's built-in defaults apply. |
+
+One-time GCP setup (not automated — run once by an operator): enable the `run`, `cloudbuild`, `artifactregistry`, `iamcredentials`, and `secretmanager` APIs; create the two Secret Manager secrets; create the deploy SA with `run.admin` + `cloudbuild.builds.editor` + `artifactregistry.admin` + `storage.admin` + `iam.serviceAccountUser`; grant the **runtime** SA `datastore.user` + `secretmanager.secretAccessor`; and create the WIF pool/provider bound to this repo. The `audits` composite index still must be created manually — the workflow does not manage Firestore indexes.
+
+**Gotchas:** both Secret Manager secrets must exist before the first deploy or the backend step fails (create `resend-api-key` with a placeholder if Resend isn't in use yet, or drop its token from `--set-secrets`). CORS stays `*` until `ALLOWED_ORIGIN` is set as a repo variable.
 
 ### Local dev
 
