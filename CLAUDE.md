@@ -18,7 +18,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`.
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
 - **Storage:** Firestore Native, three collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), and `registrations` (append-only splash-registration leads).
-- **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** under `.github/workflows/` (`ci.yml` on PRs, `deploy.yml` on merge to `main`, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflows are the reference path, not a hard dependency.
+- **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** as a single gated pipeline at `.github/workflows/pipeline.yml` (PRs run tests + CodeQL + Docker build; merge to `main` re-runs them and then deploys, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflow is the reference path, not a hard dependency.
 
 ---
 
@@ -28,8 +28,8 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 root-and-fruit/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml        ← PR checks: backend tests + Docker build (no deploy)
-│       └── deploy.yml    ← push-to-main → Cloud Run deploy (WIF, backend then frontend)
+│       └── pipeline.yml  ← one gated pipeline: PR runs tests + CodeQL + Docker build;
+│                            merge to main re-runs them, then deploys (WIF, backend→frontend)
 ├── backend/
 │   ├── server.js         ← Express API: /api/analyze, /api/search, /api/register, /api/audits, /api/share, /health
 │   ├── test/
@@ -299,16 +299,20 @@ The non-negotiable wiring:
 
 ### CI/CD — GitHub Actions → Cloud Run
 
-Two workflows live under `.github/workflows/`:
+A single gated workflow lives at `.github/workflows/pipeline.yml`. It runs on both `pull_request → main` and `push → main`, with four jobs:
 
-| Workflow | Trigger | Does |
-|----------|---------|------|
-| `ci.yml` | pull request → `main` | Runs the backend test suite (`npm test`) and builds both Docker images as a compile-check. **No deploy, no GCP access, no secrets.** Unreviewed code never reaches production. |
-| `deploy.yml` | push → `main` (i.e. after a merge) | Authenticates to GCP **keyless via Workload Identity Federation** (no SA JSON key in GitHub), then Cloud Run **source-deploys** the backend, reads back its URL, and deploys the frontend with `BACKEND_URL` wired to it. A `concurrency` group serializes deploys so two quick merges can't race. |
+| Job | Runs on | Does |
+|-----|---------|------|
+| `test` | PR + push | Backend test suite (`npm test`). **Gate.** |
+| `codeql` | PR + push | CodeQL static analysis (`javascript-typescript`); results surface in the Security tab and as a PR check. **Gate.** |
+| `docker-build` | PR + push | Builds both images as a compile-check (no push). **Gate.** |
+| `deploy` | **push to `main` only** | `needs: [test, codeql, docker-build]` + `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`. Authenticates **keyless via WIF**, then Cloud Run **source-deploys** the backend, reads back its URL, and deploys the frontend with `BACKEND_URL` wired to it. |
 
-Design decisions baked into the workflows:
+**The deploy job runs only if all three gate jobs pass, and only on a merge to `main`** — never on a PR, and never on a fork PR (where the WIF repo variables are absent). The `if:` guard is what prevents the auth step from firing in contexts that lack the deploy config. A per-ref `concurrency` group cancels superseded PR runs but **serializes** main runs so a deploy is never interrupted mid-flight.
 
-- **Keyless auth (WIF).** `deploy.yml` requests an OIDC token (`permissions: id-token: write`) and impersonates a deploy service account via a workload identity provider locked to this repo. **No long-lived credential is stored in GitHub.**
+Design decisions baked into the workflow:
+
+- **Keyless auth (WIF).** The `deploy` job requests an OIDC token (`permissions: id-token: write`) and impersonates a deploy service account via a workload identity provider locked to this repo. **No long-lived credential is stored in GitHub.** A preflight step fails with a readable message if the `GCP_*` repo variables are missing (instead of the auth action's cryptic "must specify exactly one of workload_identity_provider or credentials_json").
 - **App secrets stay in Secret Manager.** `ANTHROPIC_API_KEY` and `RESEND_API_KEY` are attached with `--set-secrets` (`anthropic-api-key:latest`, `resend-api-key:latest`); the workflow never sees their values. `GOOGLE_CLOUD_PROJECT` is injected by Cloud Run automatically and is **not** set in the workflow.
 - **Cloud Run source deploy.** `gcloud run deploy --source` builds each image with Cloud Build from the Dockerfile — no Artifact Registry wiring by hand, fitting the app's no-build-step design.
 - **Backend deploy flags** encode the documented shape: `--memory 600Mi --max-instances 10 --timeout 600`. **Frontend:** `--memory 256Mi --max-instances 5`.

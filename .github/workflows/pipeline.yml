@@ -1,0 +1,177 @@
+name: CI/CD Pipeline
+
+# One gated pipeline.
+#
+#   Pull request → main : run unit tests + CodeQL + Docker build. No deploy.
+#   Push to main (merge): re-run all three checks, then deploy to Cloud Run
+#                         ONLY if every check passes (the deploy job `needs`
+#                         them). Deploy is further guarded to the push event so
+#                         it never runs on a PR — and never on a fork PR, where
+#                         the WIF repo variables aren't available.
+#
+# Auth is keyless via Workload Identity Federation. App secrets live in GCP
+# Secret Manager (attached with --set-secrets); nothing secret is stored in
+# GitHub. Config comes from repo VARIABLES (Settings → Secrets and variables →
+# Actions → Variables): GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER,
+# GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
+# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded PR runs; serialize (don't cancel) runs on main so a deploy
+# is never interrupted mid-flight.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  BACKEND_SERVICE: root-and-fruit-backend
+  FRONTEND_SERVICE: root-and-fruit-frontend
+
+jobs:
+  # ── Gate 1: unit/integration tests ──────────────────────────────────────
+  test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend tests
+        working-directory: backend
+        run: npm test
+
+  # ── Gate 2: CodeQL static analysis ──────────────────────────────────────
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
+
+  # ── Gate 3: images build cleanly ────────────────────────────────────────
+  docker-build:
+    name: Docker build check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build backend image
+        run: docker build -t rf-backend-check ./backend
+      - name: Build frontend image
+        run: docker build -t rf-frontend-check ./frontend
+
+  # ── Deploy: only after all gates pass, only on a merge to main ──────────
+  deploy:
+    name: Deploy to Cloud Run
+    needs: [test, codeql, docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # checkout
+      id-token: write       # required for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v5
+
+      # Fail early with a readable message if the repo variables are missing —
+      # otherwise the auth action errors with a cryptic "must specify exactly
+      # one of workload_identity_provider or credentials_json".
+      - name: Verify deploy configuration is present
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          : "${GCP_PROJECT_ID:?Set the GCP_PROJECT_ID repo variable (Settings → Secrets and variables → Actions → Variables)}"
+          : "${GCP_REGION:?Set the GCP_REGION repo variable}"
+          : "${GCP_WIF_PROVIDER:?Set the GCP_WIF_PROVIDER repo variable}"
+          : "${GCP_DEPLOY_SA:?Set the GCP_DEPLOY_SA repo variable}"
+          echo "Deploy config present."
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Backend first (frontend depends on its URL) ──────────────────────
+      - name: Deploy backend
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE" \
+            --source ./backend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 600Mi \
+            --max-instances 10 \
+            --timeout 600 \
+            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+
+      - name: Capture backend URL
+        id: backend
+        run: |
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "Backend deployed at $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # ── Frontend with BACKEND_URL wired to the backend we just deployed ──
+      - name: Deploy frontend
+        run: |
+          gcloud run deploy "$FRONTEND_SERVICE" \
+            --source ./frontend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 256Mi \
+            --max-instances 5 \
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deploy complete :rocket:"
+            echo ""
+            echo "- **Backend:** ${{ steps.backend.outputs.url }}"
+            echo "- **Frontend:** deployed with BACKEND_URL wired to the above"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
