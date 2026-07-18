@@ -16,11 +16,25 @@ name: CI/CD Pipeline
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
 # REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
 
+# pull_request / push run the gate jobs; only push reaches deploy (see the
+# `if:` guard on `deploy`). workflow_dispatch is the manual rollback path — it
+# runs ONLY the `rollback` job (the gate/deploy jobs are guarded off it).
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service to roll back
+        type: choice
+        options: [backend, frontend, both]
+        default: both
+      revision:
+        description: Target revision name (blank = previous ready revision). Requires a single service.
+        required: false
+        default: ''
 
 # Cancel superseded PR runs; serialize (don't cancel) runs on main so a deploy
 # is never interrupted mid-flight.
@@ -28,15 +42,21 @@ concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Cloud Run service names. Changing one creates a NEW service on the next
+# deploy — the old one keeps running (and billing) until deleted manually.
 env:
   BACKEND_SERVICE: root-and-fruit-backend
   FRONTEND_SERVICE: root-and-fruit-frontend
 
 jobs:
   # ── Gate 1: unit/integration tests ──────────────────────────────────────
+  # Backend only — the frontend is a single static HTML file with no build
+  # step and currently no test suite (see recommendations in the repo docs).
   test:
     name: Backend tests
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -57,9 +77,14 @@ jobs:
         run: npm test
 
   # ── Gate 2: CodeQL static analysis ──────────────────────────────────────
+  # Scans all JS/TS in the repo — backend/server.js, frontend/server.js, and
+  # the inline <script> in frontend/public/index.html. Findings surface in the
+  # Security tab and as a PR check (security-events: write is required).
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    timeout-minutes: 15
     permissions:
       security-events: write
       actions: read
@@ -78,9 +103,14 @@ jobs:
           category: "/language:javascript-typescript"
 
   # ── Gate 3: images build cleanly ────────────────────────────────────────
+  # Compile-check only: images are built locally and never pushed, so no
+  # registry login is needed. The deploy job rebuilds from source with Cloud
+  # Build — these images are throwaways that just prove the Dockerfiles work.
   docker-build:
     name: Docker build check
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -90,12 +120,75 @@ jobs:
       - name: Build frontend image
         run: docker build -t rf-frontend-check ./frontend
 
+  # ── Gate 4: backend dependency audit ────────────────────────────────────
+  # CodeQL scans our own code; this scans the dependency tree for known CVEs.
+  # Gated at `critical` so it doesn't block on the pre-existing HIGH advisory in
+  # the @google-cloud/firestore → teeny-request → uuid chain (transitive; not
+  # directly fixable without a firestore bump). Once that chain is addressed
+  # (npm audit fix, a firestore upgrade, or a package.json `overrides` for uuid),
+  # tighten to `--audit-level=high`. To make it non-blocking instead, add
+  # `continue-on-error: true` to the audit step or drop this job from deploy.needs.
+  audit:
+    name: Backend dependency audit
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: npm audit --audit-level=critical
+
+  # ── Gate 5: frontend smoke test ─────────────────────────────────────────
+  # The frontend has no build step, so a JS bug in the single-file app ships
+  # silently. This boots frontend/server.js and drives every nav tab in headless
+  # Chromium — catching uncaught errors, missing runtime-config injection, and
+  # nav/tabs-array drift (the dead-showView hazard). See frontend/test/smoke.mjs.
+  frontend-smoke:
+    name: Frontend smoke test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+      # Playwright is a CI-only concern — installed ad-hoc with --no-save so it
+      # never lands in the frontend's committed dependency set.
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: |
+          npm i -D --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Run smoke test
+        working-directory: frontend
+        run: node test/smoke.mjs
+
   # ── Deploy: only after all gates pass, only on a merge to main ──────────
   deploy:
     name: Deploy to Cloud Run
-    needs: [test, codeql, docker-build]
+    needs: [test, codeql, docker-build, audit, frontend-smoke]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read       # checkout
       id-token: write       # required for Workload Identity Federation
@@ -128,7 +221,28 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      # Record the revision each service is serving BEFORE we overwrite it, so
+      # the manual rollback (workflow_dispatch) has a known-good target on file.
+      # Non-fatal on first deploy, when the services don't exist yet.
+      - name: Record current (pre-deploy) revisions
+        run: |
+          for svc in "$BACKEND_SERVICE" "$FRONTEND_SERVICE"; do
+            rev=$(gcloud run services describe "$svc" \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --region "${{ vars.GCP_REGION }}" \
+              --format 'value(status.traffic[0].revisionName)' 2>/dev/null || true)
+            echo "- **$svc** was serving: \`${rev:-none (first deploy)}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       # ── Backend first (frontend depends on its URL) ──────────────────────
+      # `--source` = Cloud Run source deploy: Cloud Build builds the image
+      # from backend/Dockerfile server-side. Secrets are attached by reference
+      # (--set-secrets) so their values never pass through this workflow.
+      # --timeout 600 matches the documented long-running AI request budget.
+      # Optional env vars are appended only when the repo variable is set —
+      # unset variables fall back to the app's built-in defaults. (The IDE
+      # "Context access might be invalid" warnings on this line are the linter
+      # not knowing these optional repo variables; they are safe to ignore.)
       - name: Deploy backend
         run: |
           gcloud run deploy "$BACKEND_SERVICE" \
@@ -143,6 +257,9 @@ jobs:
             --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
             --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
 
+      # Read the backend's public URL back so the frontend deploy can inject
+      # it as BACKEND_URL — this ordering is the hard constraint that prevents
+      # parallelizing the two deploys.
       - name: Capture backend URL
         id: backend
         run: |
@@ -154,7 +271,12 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       # ── Frontend with BACKEND_URL wired to the backend we just deployed ──
+      # BACKEND_URL is read at request time by frontend/server.js and injected
+      # into HTML as window.__RF_CONFIG__ — it is runtime config, not baked
+      # into the image. APP_VERSION=<commit sha> makes deploys traceable from
+      # the browser (__RF_CONFIG__.version).
       - name: Deploy frontend
+        id: frontend
         run: |
           gcloud run deploy "$FRONTEND_SERVICE" \
             --source ./frontend \
@@ -165,6 +287,32 @@ jobs:
             --memory 256Mi \
             --max-instances 5 \
             --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+          URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      # Fail the deploy if the live services don't actually answer — otherwise a
+      # broken container reports green. `curl -f` returns non-zero on HTTP 4xx/5xx;
+      # a short retry loop absorbs Cloud Run cold-start latency on the new revision.
+      - name: Post-deploy smoke test
+        run: |
+          probe() {
+            local name="$1" url="$2"
+            for attempt in 1 2 3 4 5; do
+              if curl -fsS --max-time 20 "$url" > /dev/null; then
+                echo "✓ $name OK ($url)"
+                return 0
+              fi
+              echo "… $name not ready (attempt $attempt), retrying in 10s"
+              sleep 10
+            done
+            echo "✗ $name failed health check: $url"
+            return 1
+          }
+          probe "backend /health"  "${{ steps.backend.outputs.url }}/health"
+          probe "frontend /"       "${{ steps.frontend.outputs.url }}/"
 
       - name: Summary
         run: |
@@ -172,6 +320,86 @@ jobs:
             echo "### Deploy complete :rocket:"
             echo ""
             echo "- **Backend:** ${{ steps.backend.outputs.url }}"
-            echo "- **Frontend:** deployed with BACKEND_URL wired to the above"
+            echo "- **Frontend:** ${{ steps.frontend.outputs.url }}"
             echo "- **Commit:** \`${{ github.sha }}\`"
+            echo "- Health checks passed for /health and /."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Rollback: manual only (workflow_dispatch) ────────────────────────────
+  # Cloud Run keeps every revision; this reroutes 100% of traffic to a prior
+  # one without rebuilding. With no `revision` input, it targets the second-
+  # newest ready revision per selected service (the one live before the last
+  # deploy). Trigger from Actions → CI/CD Pipeline → Run workflow.
+  rollback:
+    name: Rollback Cloud Run
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify deploy configuration is present
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          : "${GCP_PROJECT_ID:?Set the GCP_PROJECT_ID repo variable}"
+          : "${GCP_REGION:?Set the GCP_REGION repo variable}"
+          : "${GCP_WIF_PROVIDER:?Set the GCP_WIF_PROVIDER repo variable}"
+          : "${GCP_DEPLOY_SA:?Set the GCP_DEPLOY_SA repo variable}"
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Roll back traffic
+        env:
+          INPUT_SERVICE: ${{ inputs.service }}
+          INPUT_REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_REVISION" ] && [ "$INPUT_SERVICE" = "both" ]; then
+            echo "A specific revision requires a single service (backend or frontend), not 'both'." >&2
+            exit 1
+          fi
+
+          case "$INPUT_SERVICE" in
+            backend)  services="$BACKEND_SERVICE" ;;
+            frontend) services="$FRONTEND_SERVICE" ;;
+            both)     services="$BACKEND_SERVICE $FRONTEND_SERVICE" ;;
+            *) echo "Unknown service: $INPUT_SERVICE" >&2; exit 1 ;;
+          esac
+
+          for svc in $services; do
+            if [ -n "$INPUT_REVISION" ]; then
+              target="$INPUT_REVISION"
+            else
+              # Second-newest ready revision = the one serving before the last deploy.
+              target=$(gcloud run revisions list \
+                --service "$svc" \
+                --project "${{ vars.GCP_PROJECT_ID }}" \
+                --region "${{ vars.GCP_REGION }}" \
+                --format 'value(metadata.name)' \
+                --sort-by '~metadata.creationTimestamp' \
+                --limit 2 | sed -n '2p')
+            fi
+            if [ -z "$target" ]; then
+              echo "No prior revision found for $svc — nothing to roll back to." >&2
+              exit 1
+            fi
+            echo "Rolling $svc back to $target"
+            gcloud run services update-traffic "$svc" \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --region "${{ vars.GCP_REGION }}" \
+              --to-revisions "$target=100"
+            echo "- **$svc** → \`$target\`" >> "$GITHUB_STEP_SUMMARY"
+          done
