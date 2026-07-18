@@ -44,8 +44,15 @@ guardrails.
 
 ```
 root-and-fruit/
+├── .github/
+│   └── workflows/
+│       └── pipeline.yml  # CI/CD: test → codeql → docker-build → audit →
+│                          # frontend-smoke → deploy (Cloud Run) → rollback
 ├── backend/
 │   ├── server.js         # Express API: /api/analyze, /api/audits, /api/share, /health
+│   ├── test/
+│   │   ├── server.test.js  # node:test — HTTP integration
+│   │   └── retry.test.js   # node:test — Anthropic retry helper
 │   ├── Dockerfile
 │   ├── .dockerignore
 │   ├── .env.example
@@ -53,6 +60,8 @@ root-and-fruit/
 ├── frontend/
 │   ├── public/
 │   │   └── index.html    # the entire frontend app (single file)
+│   ├── test/
+│   │   └── smoke.mjs     # Playwright nav smoke test (run via CI, see Tests)
 │   ├── server.js         # static server + runtime config injection
 │   ├── Dockerfile
 │   ├── .dockerignore
@@ -139,9 +148,42 @@ Never commit a real `.env` — `.gitignore` excludes `.env*` except `.env.exampl
 ## Deployment
 
 Both services are stateless containers built from their `Dockerfile`s. They run on
-any Node-friendly platform; the reference deployment is Google Cloud Run.
+any Node-friendly platform; the reference deployment is Google Cloud Run, driven by
+the CI/CD pipeline at [`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml).
 
-**Deploy the backend first** (the frontend needs its URL):
+### CI/CD pipeline
+
+On every pull request and push to `main`, five gate jobs run in parallel:
+
+| Job              | Checks                                                             |
+|-------------------|--------------------------------------------------------------------|
+| `test`            | Backend `node:test` suite (`backend/test/`).                      |
+| `codeql`          | CodeQL static analysis (`security-and-quality` query suite) over the backend, frontend server, and the inline `<script>` in `index.html`. Results in the repo's **Security → Code scanning** tab. |
+| `docker-build`    | Both Dockerfiles build cleanly (compile check only — not pushed). |
+| `audit`           | `npm audit --audit-level=critical` on the backend dependency tree. |
+| `frontend-smoke`  | Boots `frontend/server.js` and drives every nav tab in headless Chromium (`frontend/test/smoke.mjs`) to catch broken navigation / uncaught JS errors. |
+
+**Only on push to `main`, and only if every gate passes**, the `deploy` job runs:
+records the currently-live revisions, deploys the backend (`--source` build via
+Cloud Build), reads back its URL, deploys the frontend with `BACKEND_URL` wired to
+it, then runs a post-deploy `curl` health check against both services' public URLs.
+
+Auth is keyless — [Workload Identity Federation](https://github.com/google-github-actions/auth),
+no long-lived GCP key stored in GitHub. Required repo variables (Settings →
+Secrets and variables → Actions → Variables): `GCP_PROJECT_ID`, `GCP_REGION`,
+`GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`.
+
+**Rollback:** trigger the workflow manually (Actions → CI/CD Pipeline → *Run
+workflow*) to reroute 100% of traffic to a prior Cloud Run revision without
+rebuilding — pick `backend`, `frontend`, or `both`, and optionally a specific
+revision name (defaults to the revision that was live before the last deploy).
+
+### Manual / first-time deploy
+
+For a first deploy, or deploying outside CI, the same two commands the pipeline
+runs under the hood:
+
+**Backend first** (the frontend needs its URL):
 
 ```bash
 gcloud run deploy root-and-fruit-backend \
@@ -172,9 +214,6 @@ Wiring notes:
 Cloud Run keeps existing env vars across `--source` redeploys, so you only need to
 pass `--set-env-vars` when actually changing one.
 
-There is **no CI/CD or infra-as-code in this repo** by design — it ships
-application code only.
-
 ---
 
 ## API
@@ -193,4 +232,22 @@ application code only.
 
 ## Tests
 
-No automated tests yet — `npm test` in each service is a passing placeholder.
+**Backend** — `node:test` HTTP integration + unit tests:
+
+```bash
+cd backend
+npm ci
+npm test
+```
+
+**Frontend** — no unit tests (`npm test` is a passing placeholder — the app is a
+single static file with no build step). CI instead runs a Playwright smoke test
+that boots the server and clicks through every nav tab in headless Chromium,
+catching uncaught JS errors and nav/view-routing drift:
+
+```bash
+cd frontend
+npm ci
+npm i -D --no-save playwright && npx playwright install chromium
+node test/smoke.mjs
+```
