@@ -2470,6 +2470,9 @@ async function applyAnalysis(data) {
 //  parsed/executed. Apply it to VALUES only — never wrap a whole template, or
 //  the report's own markup would render as literal angle-bracket text.
 // ══════════════════════════════════════════════
+// escapeHtml — HTML-entity-encode an untrusted value for safe innerHTML use.
+// in:  v (any) — untrusted value; coerced to string, null/undefined → ''
+// out: string — text with & < > " ' replaced by their HTML entities
 function escapeHtml(v) {
   return String(v ?? '')
     .replace(/&/g, '&amp;')
@@ -2478,8 +2481,9 @@ function escapeHtml(v) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
-// Allow only http/https links in href; anything else (javascript:, data:, …)
-// becomes an inert '#'. Returned value is escaped for use inside the attribute.
+// safeUrl — allow only http/https URLs in an href; neutralize any other scheme.
+// in:  u (any) — candidate URL; coerced to string and trimmed
+// out: string — the escaped http(s) URL, or '#' for javascript:/data:/etc.
 function safeUrl(u) {
   const s = String(u ?? '').trim();
   return /^https?:\/\//i.test(s) ? escapeHtml(s) : '#';
