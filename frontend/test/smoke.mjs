@@ -42,10 +42,18 @@ const EXPECTED_TABS = [
   ['methodology', 'About'],
 ];
 
+// fail — abort the smoke test with a message (thrown, caught by the outer runner).
+// in:  msg (string) — failure description
+// out: never returns — throws Error(msg)
 function fail(msg) {
   throw new Error(msg);
 }
 
+/**
+ * Poll the frontend server until it responds 200, or time out.
+ * @param {number} [timeoutMs=15000]  max time to wait before giving up
+ * @returns {Promise<void>}  resolves once the server is up; calls fail() on timeout
+ */
 async function waitForServer(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
