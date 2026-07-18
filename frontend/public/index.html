@@ -2460,6 +2460,31 @@ async function applyAnalysis(data) {
   renderAuditReport(data);
 }
 
+// ══════════════════════════════════════════════
+//  XSS-SAFE INTERPOLATION HELPERS
+//  The report / saved / compare / scrubber / electability views build HTML from
+//  template strings and assign it via innerHTML. The surrounding markup is
+//  authored here (trusted); the interpolated VALUES come from the AI response,
+//  the user-typed subject name, and localStorage — all untrusted. escapeHtml()
+//  neutralizes any markup in a value so it renders as text instead of being
+//  parsed/executed. Apply it to VALUES only — never wrap a whole template, or
+//  the report's own markup would render as literal angle-bracket text.
+// ══════════════════════════════════════════════
+function escapeHtml(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+// Allow only http/https links in href; anything else (javascript:, data:, …)
+// becomes an inert '#'. Returned value is escaped for use inside the attribute.
+function safeUrl(u) {
+  const s = String(u ?? '').trim();
+  return /^https?:\/\//i.test(s) ? escapeHtml(s) : '#';
+}
+
 function renderAuditReport(data) {
   const isCandidate = subjectType === 'candidate';
   let html = '';
@@ -2467,13 +2492,13 @@ function renderAuditReport(data) {
   // Summary
   if (data.summary) {
     html += `<div class="audit-section"><div class="audit-section-title" style="color:var(--gold);">Executive Summary</div>
-      <p style="font-size:13px;line-height:1.7;color:var(--text-dim);">${data.summary}</p></div>`;
+      <p style="font-size:13px;line-height:1.7;color:var(--text-dim);">${escapeHtml(data.summary)}</p></div>`;
   }
 
   // Background
   if (data.historicalBackground) {
     html += `<div class="audit-section"><div class="audit-section-title">Historical Background</div>
-      <p style="font-size:12px;line-height:1.7;color:var(--text-dim);">${data.historicalBackground}</p></div>`;
+      <p style="font-size:12px;line-height:1.7;color:var(--text-dim);">${escapeHtml(data.historicalBackground)}</p></div>`;
   }
 
   // Supporters/Opponents/Funders
@@ -2485,7 +2510,7 @@ function renderAuditReport(data) {
         <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--green);margin-bottom:8px;">
           <i class="fa-solid fa-thumbs-up" style="margin-right:4px;"></i>${isCandidate ? 'Supporters' : 'Proponents'}</div>
         <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
-          ${data.supporters.map(s => `<li style="padding:2px 0;">· ${s}</li>`).join('')}
+          ${data.supporters.map(s => `<li style="padding:2px 0;">· ${escapeHtml(s)}</li>`).join('')}
         </ul></div>`;
     }
     if (data.opponents?.length) {
@@ -2493,7 +2518,7 @@ function renderAuditReport(data) {
         <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--red);margin-bottom:8px;">
           <i class="fa-solid fa-thumbs-down" style="margin-right:4px;"></i>Opponents</div>
         <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
-          ${data.opponents.map(o => `<li style="padding:2px 0;">· ${o}</li>`).join('')}
+          ${data.opponents.map(o => `<li style="padding:2px 0;">· ${escapeHtml(o)}</li>`).join('')}
         </ul></div>`;
     }
     if (data.funders?.length) {
@@ -2501,7 +2526,7 @@ function renderAuditReport(data) {
         <div style="font-size:10px;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.15em;color:var(--purple);margin-bottom:8px;">
           <i class="fa-solid fa-money-bill-trend-up" style="margin-right:4px;"></i>Funders & Backers</div>
         <ul style="list-style:none;font-size:12px;color:var(--text-dim);">
-          ${data.funders.map(f => `<li style="padding:2px 0;">· ${f}</li>`).join('')}
+          ${data.funders.map(f => `<li style="padding:2px 0;">· ${escapeHtml(f)}</li>`).join('')}
         </ul></div>`;
     }
     html += `</div></div>`;
@@ -2526,7 +2551,7 @@ function renderAuditReport(data) {
           <span style="color:var(--orange);font-family:'DM Mono',monospace;font-size:12px;font-weight:600;">${data.visibility.score}/10</span>
           <span class="audit-item-name">Information Availability</span>
         </div>
-        <div class="audit-item-reason">${data.visibility.reasoning}</div>
+        <div class="audit-item-reason">${escapeHtml(data.visibility.reasoning)}</div>
       </div></div>`;
   }
   html += renderAuditSection('Toxic Soil — Penalties', 'var(--red)', data.toxic, toxicLabels, 'toxic');
@@ -2549,8 +2574,8 @@ function renderAuditReport(data) {
         html += `<div class="source-item">
           <i class="fa-solid fa-angle-right" style="color:var(--border);margin-top:3px;font-size:11px;flex-shrink:0;"></i>
           ${s.url && s.url !== 'N/A'
-            ? `<a href="${s.url}" target="_blank" rel="noopener noreferrer" class="source-link">${s.title}</a>`
-            : `<span class="source-text">${s.title}</span>`}
+            ? `<a href="${safeUrl(s.url)}" target="_blank" rel="noopener noreferrer" class="source-link">${escapeHtml(s.title)}</a>`
+            : `<span class="source-text">${escapeHtml(s.title)}</span>`}
           ${s.biasRating ? `<span class="bias-badge" style="color:${biasColor};border-color:${biasColor}30;">Bias ${bias}/10</span>` : ''}
         </div>`;
       });
@@ -2583,10 +2608,10 @@ function renderAuditSection(title, color, items, labels, type) {
     html += `<div class="audit-item">
       <div class="audit-item-head">
         <i class="fa-solid ${icon}" style="color:${iconColor};font-size:13px;"></i>
-        <span class="audit-item-name" style="color:${type==='boolean' ? (item.met ? 'var(--text)' : 'var(--text-dim)') : 'var(--text)'}">${labels[i]}</span>
+        <span class="audit-item-name" style="color:${type==='boolean' ? (item.met ? 'var(--text)' : 'var(--text-dim)') : 'var(--text)'}">${escapeHtml(labels[i])}</span>
         ${badge}
       </div>
-      <div class="audit-item-reason">${item.reasoning || '—'}</div>
+      <div class="audit-item-reason">${item.reasoning ? escapeHtml(item.reasoning) : '—'}</div>
     </div>`;
   });
   return html + '</div>';
@@ -2804,8 +2829,8 @@ async function renderSavedList() {
     const { color, tier } = getVerdictByTitle(a.verdict);
     return `<div class="audit-list-item tier-${tier}" onclick="loadAudit(${a.id})">
       <div style="flex:1;min-width:0;">
-        <div class="audit-list-name">${a.name}</div>
-        <div class="audit-list-meta">${a.verdict} · ${a.date} · ${a.subjectType}</div>
+        <div class="audit-list-name">${escapeHtml(a.name)}</div>
+        <div class="audit-list-meta">${escapeHtml(a.verdict)} · ${escapeHtml(a.date)} · ${escapeHtml(a.subjectType)}</div>
       </div>
       <div class="audit-list-score" style="color:${color};">${a.total}</div>
       <div class="audit-list-actions" onclick="event.stopPropagation()">
@@ -2840,7 +2865,7 @@ function getVerdictByTitle(title) {
 function populateCompareSelects() {
   const audits = getSavedAudits();
   const opts = audits.length
-    ? ['<option value="">— Select —</option>', ...audits.map(a => `<option value="${a.id}">${a.name} (${a.total}/57)</option>`)].join('')
+    ? ['<option value="">— Select —</option>', ...audits.map(a => `<option value="${a.id}">${escapeHtml(a.name)} (${a.total}/57)</option>`)].join('')
     : '<option value="">No saved audits</option>';
   ['compareA','compareB'].forEach(id => document.getElementById(id).innerHTML = opts);
   document.getElementById('compareEmpty').style.display = audits.length < 2 ? 'block' : 'none';
@@ -2865,11 +2890,11 @@ function runComparison() {
     const vals = [audit.scores.root, audit.scores.branch, audit.scores.fruit, audit.scores.vis];
     return `<div class="compare-panel">
       <div class="compare-panel-header" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>${audit.name}</span>
+        <span>${escapeHtml(audit.name)}</span>
         <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:${color};">${audit.total}</span>
       </div>
       <div style="padding:16px;">
-        <div style="font-size:11px;color:${color};font-family:'DM Mono',monospace;margin-bottom:16px;">${audit.verdict}</div>
+        <div style="font-size:11px;color:${color};font-family:'DM Mono',monospace;margin-bottom:16px;">${escapeHtml(audit.verdict)}</div>
         ${cats.map((cat,i) => `
           <div style="margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
@@ -3684,7 +3709,7 @@ Return ONLY valid JSON:
     const data = await response.json();
     renderScrubberResults(extractJSON(messageText(data)));
   } catch(err) {
-    document.getElementById('scrubberContent').innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 0;">Scrub failed: ${err.message}</div>`;
+    document.getElementById('scrubberContent').innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 0;">Scrub failed: ${escapeHtml(err.message)}</div>`;
   } finally {
     document.getElementById('scrubberLoading').style.display = 'none';
     if (rescrub) rescrub.disabled = false;
@@ -3695,16 +3720,16 @@ function renderScrubberResults(data) {
   const stanceColor = s => s === 'pro' ? 'var(--green)' : s === 'con' ? 'var(--red)' : 'var(--gold)';
   const typeClass = t => t === 'vote' ? 'scrubber-vote' : t === 'bill' ? 'scrubber-bill' : 'scrubber-statement';
   let html = '';
-  if (data.summary) html += `<div style="font-size:12px;color:var(--text-dim);line-height:1.6;margin-bottom:16px;padding:10px 12px;background:var(--surface2);border-radius:8px;">${data.summary}</div>`;
+  if (data.summary) html += `<div style="font-size:12px;color:var(--text-dim);line-height:1.6;margin-bottom:16px;padding:10px 12px;background:var(--surface2);border-radius:8px;">${escapeHtml(data.summary)}</div>`;
   (data.criteria || []).forEach(section => {
     if (!section.items?.length) return;
-    html += `<div class="scrubber-criteria-block"><div class="scrubber-criteria-title">${section.area}</div>`;
+    html += `<div class="scrubber-criteria-block"><div class="scrubber-criteria-title">${escapeHtml(section.area)}</div>`;
     section.items.forEach(item => {
       html += `<div class="scrubber-item">
-        <span class="scrubber-item-type ${typeClass(item.type)}">${item.type}</span>
+        <span class="scrubber-item-type ${typeClass(item.type)}">${escapeHtml(item.type)}</span>
         <div class="scrubber-item-content">
-          <div style="color:${stanceColor(item.stance)};">${item.description}</div>
-          <div class="scrubber-item-date">${item.date || ''}</div>
+          <div style="color:${stanceColor(item.stance)};">${escapeHtml(item.description)}</div>
+          <div class="scrubber-item-date">${escapeHtml(item.date || '')}</div>
         </div>
       </div>`;
     });
@@ -3791,10 +3816,10 @@ function renderElectabilityResult(data) {
   (data.polls || []).forEach(p => {
     const pct = parseFloat(p.result) || 0;
     pollHtml += `<div class="poll-item">
-      <span class="poll-name">${p.source}</span>
+      <span class="poll-name">${escapeHtml(p.source)}</span>
       <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
-      <span class="poll-pct" style="color:${electColor};">${p.result}</span>
-      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${p.date || ''}</span>
+      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
+      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
     </div>`;
   });
   document.getElementById('electPollItems').innerHTML = pollHtml;
