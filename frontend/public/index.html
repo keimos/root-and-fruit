@@ -3023,7 +3023,10 @@ function exportPDF() {
       const imgW = W - margin*2;
       const imgH = imgW * (scCanvas.height / scCanvas.width);
       ensure(imgH + 6);
-      doc.addImage(scCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', margin, y, imgW, imgH);
+      // PNG (lossless) — the card is flat color + text, where JPEG's ringing
+      // artifacts are most visible. Aspect ratio is unchanged by the DPR backing
+      // store (width and height scale together), so imgH above stays correct.
+      doc.addImage(scCanvas.toDataURL('image/png'), 'PNG', margin, y, imgW, imgH);
       y += imgH + 8;
     }
   } catch(e) { /* canvas unavailable — text breakdown below still conveys the scores */ }
@@ -3430,7 +3433,17 @@ function drawShareCard() {
   // Baseline + adjusted are ALWAYS shown as two side-by-side circular gauges.
   const hasAdj = adjustedTotal !== baselineTotal;
   const H = 380;
-  canvas.width = W; canvas.height = H;
+  // High-DPI backing store: draw in logical W×H units but back the canvas with
+  // devicePixelRatio extra pixels so the card stays crisp on Retina/wide displays
+  // and in the PNG/PDF captures. CSS width is pinned to the logical width; height
+  // is left to the #shareCardCanvas `height:auto` rule so max-width:100% keeps the
+  // aspect ratio on narrow screens. Setting canvas.width resets the context, so
+  // apply the DPR transform right after. Capped at 3x to bound memory / PDF size.
+  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   // Map CSS verdict colors to concrete hex for canvas.
   const vColor = (cv) => {
@@ -3588,7 +3601,8 @@ function populateReportHeader() {
     setTimeout(() => {
       try {
         const img = document.getElementById('reportShareImg');
-        if (img && canvas.width > 0) img.src = canvas.toDataURL('image/jpeg', 0.92);
+        if (img && canvas.width > 0) img.src = canvas.toDataURL('image/png'); // lossless — no JPEG graininess
+
       } catch(e) { /* ignore */ }
     }, 150);
   }
