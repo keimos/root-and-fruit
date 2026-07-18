@@ -390,6 +390,43 @@ Tokens are **non-cryptographic** (`Math.random().toString(36).slice(2,10) + Date
 
 ---
 
+## Code Conventions
+
+### Function documentation (required for all new functions)
+
+**Every function created in this project MUST carry a doc comment that states three things:**
+
+1. **What the function does** — a one-line (or short) description of its purpose.
+2. **Inputs** — each parameter, its type, and its meaning. State "none" if it takes no arguments.
+3. **Outputs** — the return value and its type/shape, plus any notable side effects (DOM mutation, Firestore write, network call). State "none / void" if it returns nothing.
+
+This applies to **all** functions across every surface: backend modules (`backend/**`), the inline `<script>` functions in `frontend/public/index.html`, `frontend/server.js`, and test helpers. It applies to new functions and to any existing function you meaningfully change. This is a hard project rule — it overrides the general "match surrounding comment density" guidance.
+
+**Preferred format — JSDoc** (works for backend modules and the frontend single file alike):
+
+```js
+/**
+ * Build the cache document ID for a subject.
+ * @param {string} subject  raw user search string
+ * @param {object} [extra]  extra key dimensions (subjectType, pathway, …)
+ * @returns {{docId: string, normalized: string}}  32-char hex ID + normalized subject
+ */
+function cacheKey(subject, extra = {}) { /* … */ }
+```
+
+For a tiny helper where full JSDoc is overkill, a two- or three-line block comment is acceptable **as long as it still names the purpose, the inputs, and the output** — e.g.:
+
+```js
+// Escape a value for safe innerHTML interpolation.
+// in:  v (any) — untrusted value
+// out: string — HTML-entity-encoded text
+function escapeHtml(v) { /* … */ }
+```
+
+`backend/lib/cacheKey.js` is the reference example for the JSDoc style. Do not ship a new function with an undocumented signature.
+
+---
+
 ## Styling Conventions
 
 - All styles are in a `<style>` block at the top of `index.html`. CSS custom properties (CSS variables) define the palette under `:root`.
@@ -450,3 +487,4 @@ Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stre
 - **Do not** introduce session affinity, in-memory caching, or sticky sessions on Cloud Run — both services are stateless.
 - **Do not** remove the cache-control wrapping around the system prompt in `/api/analyze`. It is a no-op below the threshold and a free win above it.
 - **Do not** remove `localStorage` use from the frontend. It powers the per-browser user ID and the offline-fallback save path — both are intentional. (CivicSorter's no-localStorage rule does **not** apply here.)
+- **Do not** add a function without a doc comment stating its purpose, inputs, and outputs — see [Code Conventions](#code-conventions). This is required for every new or meaningfully-changed function on all surfaces.
