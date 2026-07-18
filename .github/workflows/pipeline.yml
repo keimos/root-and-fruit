@@ -80,6 +80,11 @@ jobs:
   # Scans all JS/TS in the repo — backend/server.js, frontend/server.js, and
   # the inline <script> in frontend/public/index.html. Findings surface in the
   # Security tab and as a PR check (security-events: write is required).
+  # Runs the `security-and-quality` suite: default CodeQL is security-only, so
+  # this is what adds the maintainability / quality queries. NOTE: if repo
+  # Settings → Code security has "Default setup" enabled, it overrides this
+  # workflow and its uploads are ignored — disable default setup so this job
+  # owns code scanning.
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
@@ -96,6 +101,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
+          queries: security-and-quality
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
