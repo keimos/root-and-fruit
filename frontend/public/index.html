@@ -3358,7 +3358,13 @@ async function submitRegistration() {
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
   const errEl = document.getElementById('regError');
-  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  // The segment right before a required literal must exclude that literal
+  // from its own character class, or the engine has to try every position
+  // where the literal could occur as a candidate split — O(n^2) on a crafted
+  // input (CodeQL: polynomial ReDoS). [^\s@.]+ before the dot closes that
+  // gap; the final [^\s@]+ still allows dots so multi-level domains
+  // (mail.example.co.uk) keep validating the same as before.
+  const emailValid = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email);
   if (!name || !emailValid) { errEl.style.display = 'block'; return; }
   errEl.style.display = 'none';
 
