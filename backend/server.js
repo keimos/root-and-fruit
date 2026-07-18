@@ -51,6 +51,54 @@ async function withRetry(fn, { retries = 3, baseDelay = 500, label = 'anthropic'
   }
 }
 
+// ── Request guardrails (bound abuse of the LLM proxy) ──
+// The prompt is built client-side (the locked prompt lives in the frontend), so
+// /api/analyze and /api/search must bound what a hostile or buggy caller — one
+// hitting the backend directly, bypassing the UI — can drive: clamp the token
+// budget + search rounds into a safe range and reject oversized prompts. The
+// model is NOT client-selectable (fixed to MODEL), so there's nothing to
+// allowlist there. This touches request LIMITS only, never prompt CONTENT — the
+// locked prompt is unaffected.
+const LIMITS = {
+  analyzeMaxTokens: 32000, // UI sends 16000
+  searchMaxTokens: 8000,   // UI sends 3000
+  searchMaxUses: 5,        // UI sends 4
+  promptChars: 200000      // UI prompt is ~10KB; caps giant-prompt abuse
+};
+
+/**
+ * Coerce a client-supplied value to an integer clamped into [min, max].
+ * Only real numbers or non-empty numeric strings count; anything else (missing,
+ * null, '', or non-numeric) falls back to def — Number(null)/Number('')/etc. are
+ * all 0 in JS, so we guard on type before coercing rather than trusting Number().
+ * @param {*} v         raw value (may be missing, a string, NaN, or out of range)
+ * @param {number} min  lower bound (inclusive)
+ * @param {number} max  upper bound (inclusive)
+ * @param {number} def  fallback used when v is not a usable number
+ * @returns {number}    an integer in [min, max]
+ */
+function clampInt(v, min, max, def) {
+  let n = def;
+  if (typeof v === 'number' && Number.isFinite(v)) n = v;
+  else if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) n = Number(v);
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/**
+ * Approximate character size of a system + messages prompt payload, used to
+ * reject oversized requests before they reach the Anthropic API.
+ * @param {(string|Array|undefined)} system  system prompt (string or block array)
+ * @param {Array} messages                    the messages array
+ * @returns {number}                          total character count of the payload
+ */
+function promptSize(system, messages) {
+  let n = 0;
+  if (typeof system === 'string') n += system.length;
+  else if (Array.isArray(system)) n += JSON.stringify(system).length;
+  n += JSON.stringify(messages || []).length;
+  return n;
+}
+
 // ── Email (Resend) ─────────────────────────────────────
 // RESEND_API_KEY enables registration emails. REGISTRATION_FROM must be a
 // verified sender on your Resend domain in production; the resend.dev sandbox
@@ -137,8 +185,13 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 app.post('/api/analyze', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system, max_tokens = 16000 } = req.body;
+  const { messages, system } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
+  if (promptSize(system, messages) > LIMITS.promptChars) {
+    return res.status(413).json({ error: 'prompt too large' });
+  }
+  // Clamp the client-supplied token budget into a safe server range.
+  const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.analyzeMaxTokens, 16000);
 
   // Wrap the system prompt so we can attach cache_control. Below the
   // model's minimum-prefix threshold this is a no-op; once the prompt
@@ -193,8 +246,14 @@ app.post('/api/analyze', async (req, res) => {
 app.post('/api/search', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system, max_tokens = 3000, max_uses = 4 } = req.body;
+  const { messages, system } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
+  if (promptSize(system, messages) > LIMITS.promptChars) {
+    return res.status(413).json({ error: 'prompt too large' });
+  }
+  // Clamp both client-supplied knobs into safe server ranges.
+  const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.searchMaxTokens, 3000);
+  const max_uses = clampInt(req.body.max_uses, 1, LIMITS.searchMaxUses, 4);
 
   try {
     const message = await withRetry(() => anthropic.messages.create({
@@ -381,3 +440,6 @@ module.exports = app;
 // Expose pure internals for unit testing without booting the listener.
 module.exports.withRetry = withRetry;
 module.exports.isRetryable = isRetryable;
+module.exports.clampInt = clampInt;
+module.exports.promptSize = promptSize;
+module.exports.LIMITS = LIMITS;
