@@ -7,13 +7,15 @@ const express = require('express');
 const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
+const prompts = require('./lib/prompts');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7';
-const anthropic = process.env.ANTHROPIC_API_KEY
+// `let` (not const) so tests can inject a mock client via __setAnthropic below.
+let anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
@@ -49,6 +51,54 @@ async function withRetry(fn, { retries = 3, baseDelay = 500, label = 'anthropic'
       await sleep(delay);
     }
   }
+}
+
+// ── Request guardrails (bound abuse of the LLM proxy) ──
+// The prompt is built client-side (the locked prompt lives in the frontend), so
+// /api/analyze and /api/search must bound what a hostile or buggy caller — one
+// hitting the backend directly, bypassing the UI — can drive: clamp the token
+// budget + search rounds into a safe range and reject oversized prompts. The
+// model is NOT client-selectable (fixed to MODEL), so there's nothing to
+// allowlist there. This touches request LIMITS only, never prompt CONTENT — the
+// locked prompt is unaffected.
+const LIMITS = {
+  analyzeMaxTokens: 32000, // UI sends 16000
+  searchMaxTokens: 8000,   // UI sends 3000
+  searchMaxUses: 5,        // UI sends 4
+  promptChars: 200000      // UI prompt is ~10KB; caps giant-prompt abuse
+};
+
+/**
+ * Coerce a client-supplied value to an integer clamped into [min, max].
+ * Only real numbers or non-empty numeric strings count; anything else (missing,
+ * null, '', or non-numeric) falls back to def — Number(null)/Number('')/etc. are
+ * all 0 in JS, so we guard on type before coercing rather than trusting Number().
+ * @param {*} v         raw value (may be missing, a string, NaN, or out of range)
+ * @param {number} min  lower bound (inclusive)
+ * @param {number} max  upper bound (inclusive)
+ * @param {number} def  fallback used when v is not a usable number
+ * @returns {number}    an integer in [min, max]
+ */
+function clampInt(v, min, max, def) {
+  let n = def;
+  if (typeof v === 'number' && Number.isFinite(v)) n = v;
+  else if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) n = Number(v);
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/**
+ * Approximate character size of a system + messages prompt payload, used to
+ * reject oversized requests before they reach the Anthropic API.
+ * @param {(string|Array|undefined)} system  system prompt (string or block array)
+ * @param {Array} messages                    the messages array
+ * @returns {number}                          total character count of the payload
+ */
+function promptSize(system, messages) {
+  let n = 0;
+  if (typeof system === 'string') n += system.length;
+  else if (Array.isArray(system)) n += JSON.stringify(system).length;
+  n += JSON.stringify(messages || []).length;
+  return n;
 }
 
 // ── Email (Resend) ─────────────────────────────────────
@@ -137,15 +187,29 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 app.post('/api/analyze', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system, max_tokens = 16000 } = req.body;
-  if (!messages?.length) return res.status(400).json({ error: 'messages required' });
+  // Injection fix #1: the client sends only structured subject fields — the
+  // audit prompt is assembled HERE from the locked template, so a caller (incl.
+  // one hitting this endpoint directly) cannot supply or override the system
+  // prompt. buildAuditPrompt/analyzeSystem are byte-for-byte the former
+  // client-side prompt (proven by test/prompts.equivalence.test.js).
+  const { name, subjectType, pathway, jurisdiction, office, year, sponsor } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name required' });
+  }
+  const target = prompts.buildAuditTarget({ name: name.trim(), jurisdiction, office, year, sponsor, subjectType });
+  const systemText = prompts.analyzeSystem();
+  const messages = [{ role: 'user', content: prompts.buildAuditPrompt(target, subjectType === 'candidate', pathway === 'community') }];
 
-  // Wrap the system prompt so we can attach cache_control. Below the
-  // model's minimum-prefix threshold this is a no-op; once the prompt
-  // grows past the threshold, repeated audits start hitting the cache.
-  const systemBlocks = typeof system === 'string'
-    ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
-    : system;
+  // Guardrails still apply — bound the assembled prompt (a giant subject field
+  // is the only remaining size lever) and clamp the token budget.
+  if (promptSize(systemText, messages) > LIMITS.promptChars) {
+    return res.status(413).json({ error: 'prompt too large' });
+  }
+  const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.analyzeMaxTokens, 16000);
+
+  // Attach cache_control so repeated audits can hit the prompt cache once the
+  // prefix grows past the model's minimum threshold (a no-op below it).
+  const systemBlocks = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
 
   try {
     const message = await withRetry(() => {
@@ -177,6 +241,18 @@ app.post('/api/analyze', async (req, res) => {
       cache_write: usage.cache_creation_input_tokens
     });
 
+    // #3b: validate the model's output against the audit schema. Non-blocking —
+    // we log integrity issues (malformed/out-of-range output, incl. anything an
+    // injection tried to reshape) but still return the message; the frontend
+    // parses it as before. Flip to a hard reject once the live flow is proven.
+    const parsedAudit = prompts.parseAuditFromMessage(message);
+    if (!parsedAudit) {
+      console.warn('Audit output not parseable as JSON');
+    } else {
+      const v = prompts.validateAudit(parsedAudit);
+      if (!v.ok) console.warn('Audit output failed schema validation:', v.errors);
+    }
+
     res.json(message);
   } catch (err) {
     console.error('Analyze error:', err);
@@ -193,8 +269,14 @@ app.post('/api/analyze', async (req, res) => {
 app.post('/api/search', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system, max_tokens = 3000, max_uses = 4 } = req.body;
+  const { messages, system } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
+  if (promptSize(system, messages) > LIMITS.promptChars) {
+    return res.status(413).json({ error: 'prompt too large' });
+  }
+  // Clamp both client-supplied knobs into safe server ranges.
+  const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.searchMaxTokens, 3000);
+  const max_uses = clampInt(req.body.max_uses, 1, LIMITS.searchMaxUses, 4);
 
   try {
     const message = await withRetry(() => anthropic.messages.create({
@@ -381,3 +463,9 @@ module.exports = app;
 // Expose pure internals for unit testing without booting the listener.
 module.exports.withRetry = withRetry;
 module.exports.isRetryable = isRetryable;
+module.exports.clampInt = clampInt;
+module.exports.promptSize = promptSize;
+module.exports.LIMITS = LIMITS;
+// Test-only: inject a mock Anthropic client so the /api/analyze handler path can
+// be integration-tested without a live key or network. Never called in prod.
+module.exports.__setAnthropic = (client) => { anthropic = client; };

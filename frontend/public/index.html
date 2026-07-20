@@ -2347,14 +2347,6 @@ async function autoAnalyze() {
   const year = document.getElementById('yearInput').value.trim();
   const sponsor = document.getElementById('sponsorInput').value.trim();
 
-  let target = name;
-  const extras = [];
-  if (jurisdiction) extras.push('Jurisdiction: ' + jurisdiction);
-  if (subjectType === 'candidate' && office) extras.push('Office: ' + office);
-  if (subjectType === 'policy' && year) extras.push('Year: ' + year);
-  if (subjectType === 'policy' && sponsor) extras.push('Sponsor: ' + sponsor);
-  if (extras.length) target += ' (' + extras.join(', ') + ')';
-
   setLoading(true);
   resetChecks();
   baselineScores = null;  // cleared so the footer animates live; re-locked when analysis completes
@@ -2365,19 +2357,23 @@ async function autoAnalyze() {
   document.getElementById('scrubberSection').style.display = 'none';
   document.getElementById('errorBoxReport').style.display = 'none';
 
-  const isCandidate = subjectType === 'candidate';
-  const isCommunity = currentPathway === 'community';
-  const systemPrompt = buildAuditPrompt(target, isCandidate, isCommunity);
-
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    // Injection fix #1: send ONLY the structured subject fields. The backend now
+    // owns the locked audit prompt and assembles it server-side, so the client
+    // can no longer supply or override the model instructions.
     const response = await fetch(backendUrl + '/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        max_tokens: 16000,
-        system: `You are the Integrity Index Auditor. Return ONLY valid JSON — no markdown fences, no prose before or after. Never truncate historicalBackground — it must be 2-3 full substantive paragraphs. For community leaders, civic and organizing records carry equal weight to legislative records when scoring Fruit and Evidence Quality. Use the web_search tool to verify claims, dates, vote counts, and recent activity against current sources before scoring; cite specific sources in the 'sources' array.`,
-        messages: [{ role: 'user', content: systemPrompt }]
+        name,
+        subjectType,
+        pathway: currentPathway,
+        jurisdiction,
+        office,
+        year,
+        sponsor,
+        max_tokens: 16000
       })
     });
 
