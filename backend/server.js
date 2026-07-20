@@ -7,13 +7,15 @@ const express = require('express');
 const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
+const prompts = require('./lib/prompts');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7';
-const anthropic = process.env.ANTHROPIC_API_KEY
+// `let` (not const) so tests can inject a mock client via __setAnthropic below.
+let anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
@@ -185,20 +187,29 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 app.post('/api/analyze', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system } = req.body;
-  if (!messages?.length) return res.status(400).json({ error: 'messages required' });
-  if (promptSize(system, messages) > LIMITS.promptChars) {
+  // Injection fix #1: the client sends only structured subject fields — the
+  // audit prompt is assembled HERE from the locked template, so a caller (incl.
+  // one hitting this endpoint directly) cannot supply or override the system
+  // prompt. buildAuditPrompt/analyzeSystem are byte-for-byte the former
+  // client-side prompt (proven by test/prompts.equivalence.test.js).
+  const { name, subjectType, pathway, jurisdiction, office, year, sponsor } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name required' });
+  }
+  const target = prompts.buildAuditTarget({ name: name.trim(), jurisdiction, office, year, sponsor, subjectType });
+  const systemText = prompts.analyzeSystem();
+  const messages = [{ role: 'user', content: prompts.buildAuditPrompt(target, subjectType === 'candidate', pathway === 'community') }];
+
+  // Guardrails still apply — bound the assembled prompt (a giant subject field
+  // is the only remaining size lever) and clamp the token budget.
+  if (promptSize(systemText, messages) > LIMITS.promptChars) {
     return res.status(413).json({ error: 'prompt too large' });
   }
-  // Clamp the client-supplied token budget into a safe server range.
   const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.analyzeMaxTokens, 16000);
 
-  // Wrap the system prompt so we can attach cache_control. Below the
-  // model's minimum-prefix threshold this is a no-op; once the prompt
-  // grows past the threshold, repeated audits start hitting the cache.
-  const systemBlocks = typeof system === 'string'
-    ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
-    : system;
+  // Attach cache_control so repeated audits can hit the prompt cache once the
+  // prefix grows past the model's minimum threshold (a no-op below it).
+  const systemBlocks = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
 
   try {
     const message = await withRetry(() => {
@@ -229,6 +240,18 @@ app.post('/api/analyze', async (req, res) => {
       cache_read: usage.cache_read_input_tokens,
       cache_write: usage.cache_creation_input_tokens
     });
+
+    // #3b: validate the model's output against the audit schema. Non-blocking —
+    // we log integrity issues (malformed/out-of-range output, incl. anything an
+    // injection tried to reshape) but still return the message; the frontend
+    // parses it as before. Flip to a hard reject once the live flow is proven.
+    const parsedAudit = prompts.parseAuditFromMessage(message);
+    if (!parsedAudit) {
+      console.warn('Audit output not parseable as JSON');
+    } else {
+      const v = prompts.validateAudit(parsedAudit);
+      if (!v.ok) console.warn('Audit output failed schema validation:', v.errors);
+    }
 
     res.json(message);
   } catch (err) {
@@ -443,3 +466,6 @@ module.exports.isRetryable = isRetryable;
 module.exports.clampInt = clampInt;
 module.exports.promptSize = promptSize;
 module.exports.LIMITS = LIMITS;
+// Test-only: inject a mock Anthropic client so the /api/analyze handler path can
+// be integration-tested without a live key or network. Never called in prod.
+module.exports.__setAnthropic = (client) => { anthropic = client; };
