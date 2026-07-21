@@ -1,0 +1,10 @@
+# Terraform working files — never commit these
+.terraform/
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Commit .terraform.lock.hcl (provider version pinning) — do NOT ignore it.
+# Commit terraform.tfvars here (no secrets in it — just project_id + region).
