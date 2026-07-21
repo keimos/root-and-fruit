@@ -108,12 +108,15 @@ jobs:
         with:
           category: "/language:javascript-typescript"
 
-  # ── Gate 3: images build cleanly ────────────────────────────────────────
-  # Compile-check only: images are built locally and never pushed, so no
-  # registry login is needed. The deploy job rebuilds from source with Cloud
-  # Build — these images are throwaways that just prove the Dockerfiles work.
+  # ── Gate 3: images build AND start ──────────────────────────────────────
+  # Builds each image, then RUNS the container and health-checks it. A build
+  # alone is only a compile check — it does NOT catch a file that's missing at
+  # runtime (e.g. a Dockerfile that forgets to COPY a required dir), which fails
+  # only when `node server.js` starts. Running + curling the liveness endpoint
+  # catches that class of bug here instead of on the Cloud Run deploy. Images are
+  # built locally and never pushed, so no registry login is needed.
   docker-build:
-    name: Docker build check
+    name: Docker build + container smoke test
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch'
     timeout-minutes: 15
@@ -121,10 +124,36 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+
       - name: Build backend image
         run: docker build -t rf-backend-check ./backend
+      # /health is credential-free and the Firestore client is lazy, so the
+      # backend boots and serves with no secrets — a clean liveness probe.
+      - name: Backend container starts and serves /health
+        run: |
+          docker run -d --name rf-backend -p 8080:8080 rf-backend-check
+          ok=0
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then echo "::error::backend container failed to serve /health"; docker logs rf-backend || true; fi
+          docker rm -f rf-backend >/dev/null 2>&1 || true
+          [ "$ok" = "1" ]
+
       - name: Build frontend image
         run: docker build -t rf-frontend-check ./frontend
+      - name: Frontend container starts and serves /
+        run: |
+          docker run -d --name rf-frontend -p 8081:8080 -e BACKEND_URL=http://backend.invalid rf-frontend-check
+          ok=0
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:8081/ >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then echo "::error::frontend container failed to serve /"; docker logs rf-frontend || true; fi
+          docker rm -f rf-frontend >/dev/null 2>&1 || true
+          [ "$ok" = "1" ]
 
   # ── Gate 4: backend dependency audit ────────────────────────────────────
   # CodeQL scans our own code; this scans the dependency tree for known CVEs.
