@@ -3714,16 +3714,88 @@ function populateReportHeader() {
 }
 
 // ══════════════════════════════════════════════
-//  ROBUST JSON EXTRACTOR (tolerates fences / trailing prose)
+//  ROBUST JSON EXTRACTOR (tolerates fences / prose / stray braces / truncation)
 // ══════════════════════════════════════════════
+/**
+ * Extract and parse the first valid JSON object from a model response.
+ * Tolerates ```json fences, prose (with stray braces) before/after the object,
+ * and a truncated tail (auto-closes unbalanced brackets/braces as a last resort).
+ * @param {string} raw  raw model text, possibly wrapped in fences/prose
+ * @returns {object}  the parsed JSON object
+ * @throws {Error}  'No JSON found in response' or 'Could not parse JSON from response'
+ */
 function extractJSON(raw) {
-  let text = String(raw || '').replace(/```json/g, '').replace(/```/g, '').trim();
-  const start = text.indexOf('{');
-  if (start === -1) throw new Error('No JSON found in response');
-  const end = text.lastIndexOf('}');
-  if (end > start) {
-    try { return JSON.parse(text.slice(start, end + 1)); } catch(e) { /* fall through */ }
+  const text = String(raw || '').replace(/```json/gi, '').replace(/```/g, '').trim();
+  if (text.indexOf('{') === -1) throw new Error('No JSON found in response');
+
+  // Attempt to repair a truncated object that starts at `i`: append the closers
+  // for whatever braces/brackets are still open, after trimming back to the last
+  // completed value. Returns the parsed object or null if it can't be recovered.
+  // in:  i (number) — index of the candidate opening '{'
+  // out: object|null — parsed object, or null when unrecoverable
+  const tryRepair = (i) => {
+    const stack = [];
+    let inStr = false, esc = false, lastGood = -1, lastGoodStack = null;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') stack.push('}');
+      else if (ch === '[') stack.push(']');
+      else if (ch === '}' || ch === ']') stack.pop();
+      // Last position, outside a string, that closed a complete value. Snapshot
+      // the open-structure stack THERE — trimming back to lastGood must not count
+      // braces opened by the truncated fragment we discard after it.
+      if (!inStr && (ch === '}' || ch === ']' || ch === '"' ||
+          (ch >= '0' && ch <= '9') || ch === 'e' || ch === 'l')) {
+        lastGood = j;
+        lastGoodStack = stack.slice();
+      }
+    }
+    if (lastGood <= i || !lastGoodStack) return null;
+    const repaired = text.slice(i, lastGood + 1).replace(/,\s*$/, '') + lastGoodStack.reverse().join('');
+    try { return JSON.parse(repaired); } catch (e) { return null; }
+  };
+
+  // Walk every '{' as a candidate object start, outermost first. For each, scan
+  // with a string-aware brace/bracket counter to its matching close and parse
+  // that slice. If a candidate never balances (truncated), try to repair it
+  // before descending into any nested object — this keeps the OUTER object even
+  // when its tail was cut off, and still survives prose with stray braces.
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false, balanced = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') {
+        depth--;
+        if (depth === 0) {
+          balanced = true;
+          try { return JSON.parse(text.slice(i, j + 1)); } catch (e) { /* try next '{' */ }
+          break;
+        }
+      }
+    }
+    // Never balanced → this candidate is the truncated outer object. Repair it.
+    if (!balanced) {
+      const repaired = tryRepair(i);
+      if (repaired) return repaired;
+    }
   }
+
   throw new Error('Could not parse JSON from response');
 }
 
