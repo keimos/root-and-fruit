@@ -3566,8 +3566,11 @@ function drawShareCard() {
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial';
   ctx.fillText('ROOT & FRUIT', 24, 23);
+  // Measure the brand width while the 13px brand font is still active — measuring
+  // after switching to the 11px font underestimates it and overlaps the two labels.
+  const brandW = ctx.measureText('ROOT & FRUIT  ').width;
   ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px Arial';
-  ctx.fillText('INTEGRITY INDEX', 24 + ctx.measureText('ROOT & FRUIT  ').width, 23);
+  ctx.fillText('INTEGRITY INDEX', 24 + brandW, 23);
   // Pathway pill (right)
   ctx.font = 'bold 9px Arial';
   const ptw = ctx.measureText(pathway.toUpperCase()).width + 18;
@@ -3855,7 +3858,10 @@ Return ONLY valid JSON:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        max_tokens: 1500,
+        // 3000 (the /api/search default) so a longer context summary + several
+        // polls don't truncate the JSON mid-object — a truncated response has no
+        // closing brace and extractJSON throws "Could not parse JSON from response".
+        max_tokens: 3000,
         max_uses: 4,
         system: 'You are an electoral analyst. Search for current polling data and return ONLY valid JSON — no markdown fences, no prose.',
         messages: [{ role: 'user', content: electPrompt }]
