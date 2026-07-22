@@ -1185,6 +1185,15 @@
         </div>
         <div class="audit-box-body" id="auditContent"></div>
 
+        <!-- Electability Rating (Full Report copy — mirrors the Results-tab card) -->
+        <div id="reportElectabilitySection" style="display:none; border-top:1px solid var(--border); padding:16px 20px;">
+          <div class="audit-section-title" style="color:var(--blue); margin-bottom:10px;">
+            <i class="fa-solid fa-chart-line" style="margin-right:6px;"></i>Electability Rating
+            <span style="font-size:10px; color:var(--text-dimmer); font-family:'DM Mono',monospace; font-weight:normal;">— separate indicator</span>
+          </div>
+          <div id="reportElectabilityContent"></div>
+        </div>
+
         <!-- Legislative Scrubber -->
         <div id="scrubberSection" style="display:none; border-top:1px solid var(--border); margin-top:4px;">
           <div class="scrubber-toggle" onclick="toggleScrubber()">
@@ -1860,6 +1869,11 @@
 let subjectType = 'candidate';
 let radarChart = null;
 let lastAnalysisData = null;
+// Auxiliary lookups (candidates only) — cached so the Full Report tab + PDF export
+// can reproduce them even after the Results-tab cards are re-rendered. Set by
+// renderElectabilityResult / renderScrubberResults; cleared on reset.
+let lastElectabilityData = null;
+let lastScrubberData = null;
 // Locked in once Auto-Analyze finishes — represents the AI's read of the record.
 // Any subsequent edits to checkboxes/sliders/People's Choice become the
 // "Adjusted" community score, while this stays frozen.
@@ -2379,9 +2393,12 @@ async function autoAnalyze() {
 
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
-    let text = (data.content || []).map(b => b.text || '').join('');
-    text = text.replace(/```json/g,'').replace(/```/g,'').trim();
-    const parsed = JSON.parse(text);
+    // Adaptive thinking + web_search can leave a prose preamble (e.g. "I have
+    // enough information to…") in the final text block before the JSON. Use the
+    // brace-extracting parser (same one the Scrubber/Electability use) instead of
+    // a bare JSON.parse so that preamble doesn't blow up the audit. messageText()
+    // also filters to real text blocks, skipping thinking/tool_use blocks.
+    const parsed = extractJSON(messageText(data));
     lastAnalysisData = parsed;
     await applyAnalysis(parsed);
 
@@ -2695,7 +2712,9 @@ function buildAuditObject() {
     toxicChecked: Array.from(toxicCBs).map(c => c.checked),
     baselineScores: baselineScores,
     justifications: getJustifications(),
-    analysisData: lastAnalysisData
+    analysisData: lastAnalysisData,
+    electabilityData: lastElectabilityData,
+    scrubberData: lastScrubberData
   };
 }
 
@@ -2764,6 +2783,13 @@ function loadAudit(id) {
   if (audit.analysisData) {
     lastAnalysisData = audit.analysisData;
     renderAuditReport(audit.analysisData);
+  }
+  // Restore auxiliary lookups (candidates only) so the Full Report + PDF reproduce them
+  lastElectabilityData = audit.electabilityData || null;
+  lastScrubberData = audit.scrubberData || null;
+  if (lastScrubberData) {
+    renderScrubberResults(lastScrubberData);
+    document.getElementById('scrubberSection').style.display = 'block';
   }
   // Restore captured baseline so the Community Assessment indicator works
   baselineScores = audit.baselineScores || null;
@@ -3206,7 +3232,46 @@ function exportPDF() {
     });
   }
 
-  if (!d) paragraph('No analysis has been run yet — run an Auto-Analyze to populate the full report.', 10, [120,120,120]);
+  // Electability Rating (separate indicator) — mirrors the Full Report / Results card
+  const el = lastElectabilityData;
+  if (el) {
+    const eScore = Math.min(10, Math.max(0, el.score || 0));
+    const trendTxt = el.trend === 'rising' ? ' (rising)' : el.trend === 'falling' ? ' (falling)' : el.trend === 'stable' ? ' (stable)' : '';
+    sectionHeading('ELECTABILITY RATING (separate indicator)');
+    doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(37,99,168);
+    ensure(8);
+    doc.text(`${eScore}/10 — ${el.tier || 'N/A'}${trendTxt}`, margin, y); y += 6;
+    if (el.context) paragraph(el.context, 9, [70,70,70]);
+    (el.polls || []).forEach(p => {
+      paragraph(`• ${p.source || 'Poll'}: ${p.result || ''}${p.date ? '  (' + p.date + ')' : ''}`, 8.5, [60,60,60], 4);
+    });
+    paragraph('Electability reflects live polling and does NOT factor into the Integrity Index score.', 8, [110,110,110]);
+    y += 4;
+  }
+
+  // Legislative Scrubber — mirrors the Full Report scrubber panel
+  const sc = lastScrubberData;
+  if (sc && (sc.summary || sc.criteria?.length)) {
+    sectionHeading('LEGISLATIVE RECORD SCRUBBER');
+    if (sc.summary) { paragraph(sc.summary, 9, [70,70,70]); y += 2; }
+    (sc.criteria || []).forEach(section => {
+      if (!section.items?.length) return;
+      ensure(10);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(139,105,20);
+      doc.text(section.area || '', margin, y); y += 5;
+      section.items.forEach(item => {
+        const stanceCol = item.stance === 'pro' ? GREEN : item.stance === 'con' ? RED : GOLD;
+        const tag = (item.type || '').toUpperCase();
+        doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(...stanceCol);
+        ensure(5); doc.text(`[${tag}]${item.date ? ' ' + item.date : ''}`, margin + 4, y); y += 4;
+        paragraph(item.description || '', 9, [70,70,70], 8);
+        y += 1;
+      });
+      y += 2;
+    });
+  }
+
+  if (!d && !el && !sc) paragraph('No analysis has been run yet — run an Auto-Analyze to populate the full report.', 10, [120,120,120]);
 
   // Footer on every page
   const pages = doc.internal.getNumberOfPages();
@@ -3245,6 +3310,8 @@ function resetAll() {
   const pcPts = document.getElementById('pcPtsLabel');
   if (pcPts) pcPts.style.opacity = '0.3';
   lastAnalysisData = null;
+  lastElectabilityData = null;
+  lastScrubberData = null;
   baselineScores = null;
   const auditBox = document.getElementById('auditBox');
   if (auditBox) auditBox.style.display = 'none';
@@ -3253,6 +3320,7 @@ function resetAll() {
   setDisp('auditBoxEmpty', 'block');
   setDisp('reportHeader', 'none');
   setDisp('scrubberSection', 'none');
+  setDisp('reportElectabilitySection', 'none');
   setDisp('electabilityCard', 'none');
   setDisp('confidenceWrap', 'none');
   setDisp('errorBoxReport', 'none');
@@ -3625,6 +3693,9 @@ function populateReportHeader() {
 
   header.style.display = 'block';
 
+  // Mirror the cached Electability lookup into the Full Report copy (no-op if none cached)
+  renderReportElectability();
+
   // Best-effort: capture the share-card canvas as the header image
   const canvas = document.getElementById('shareCardCanvas');
   if (canvas) {
@@ -3723,6 +3794,7 @@ Return ONLY valid JSON:
 }
 
 function renderScrubberResults(data) {
+  lastScrubberData = data;   // cache so the PDF export can reproduce the scrubber
   const stanceColor = s => s === 'pro' ? 'var(--green)' : s === 'con' ? 'var(--red)' : 'var(--gold)';
   const typeClass = t => t === 'vote' ? 'scrubber-vote' : t === 'bill' ? 'scrubber-bill' : 'scrubber-statement';
   let html = '';
@@ -3802,7 +3874,15 @@ Return ONLY valid JSON:
   }
 }
 
+/**
+ * Render the Electability card on the Results tab, cache the data, and mirror it
+ * into the Full Report tab.
+ * @param {object} data  parsed electability JSON {score, tier, context, polls[], trend}
+ * @returns {void}  mutates the Results-tab DOM, the Full Report DOM, and lastElectabilityData
+ */
 function renderElectabilityResult(data) {
+  lastElectabilityData = data;   // cache so the Full Report tab + PDF can reproduce it
+  renderReportElectability();
   const score = Math.min(10, Math.max(0, data.score || 0));
   const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
   const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
@@ -3832,6 +3912,54 @@ function renderElectabilityResult(data) {
 
   document.getElementById('electabilityLoading').style.display = 'none';
   document.getElementById('electabilityResult').style.display = 'flex';
+}
+
+/**
+ * Render the cached Electability data into the Full Report tab's copy.
+ * Reads lastElectabilityData; hides the section when there is nothing cached.
+ * @returns {void}  mutates #reportElectabilitySection / #reportElectabilityContent
+ */
+function renderReportElectability() {
+  const section = document.getElementById('reportElectabilitySection');
+  const content = document.getElementById('reportElectabilityContent');
+  if (!section || !content) return;
+  const data = lastElectabilityData;
+  if (!data) { section.style.display = 'none'; content.innerHTML = ''; return; }
+
+  const score = Math.min(10, Math.max(0, data.score || 0));
+  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
+  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
+
+  let pollHtml = '';
+  (data.polls || []).forEach(p => {
+    const pct = parseFloat(p.result) || 0;
+    pollHtml += `<div class="poll-item">
+      <span class="poll-name">${escapeHtml(p.source)}</span>
+      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
+      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
+      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
+    </div>`;
+  });
+
+  content.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:42px;line-height:1;color:${electColor};">${score}</div>
+        <div style="font-size:10px;color:var(--text-dimmer);">out of 10</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:${electColor};">${escapeHtml(data.tier || '')}${escapeHtml(trendIcon)}</div>
+        <div style="width:120px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:6px;">
+          <div style="height:100%;border-radius:3px;background:${electColor};width:${score/10*100}%;"></div>
+        </div>
+      </div>
+    </div>
+    ${data.context ? `<div style="font-size:12px;color:var(--text-dim);line-height:1.5;margin-bottom:8px;">${escapeHtml(data.context)}</div>` : ''}
+    ${pollHtml}
+    <div style="margin-top:10px;font-size:11px;color:var(--text-dimmer);line-height:1.6;">
+      Electability is based on live polling data and shown as a separate, independent indicator — it does not factor into the Integrity Index score.
+    </div>`;
+  section.style.display = 'block';
 }
 
 // ══════════════════════════════════════════════
