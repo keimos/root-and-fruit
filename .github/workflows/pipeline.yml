@@ -8,6 +8,12 @@ name: CI/CD Pipeline
 #                         them). Deploy is further guarded to the push event so
 #                         it never runs on a PR — and never on a fork PR, where
 #                         the WIF repo variables aren't available.
+#   Push to develop-dev : run the fast functional gates (test + docker-build +
+#                         frontend-smoke), then deploy to the DEVELOPMENT
+#                         project (root-and-fruit-dev) via the `deploy-dev` job.
+#                         The heavy security gates (CodeQL, dependency audit)
+#                         are scoped to the PR→main boundary, not every dev
+#                         push. Prod is never reachable from this branch.
 #
 # Auth is keyless via Workload Identity Federation. App secrets live in GCP
 # Secret Manager (attached with --set-secrets); nothing secret is stored in
@@ -23,7 +29,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, develop-dev]
   workflow_dispatch:
     inputs:
       service:
@@ -88,7 +94,8 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
+    # PR→main and merges to main only — not on every develop-dev push.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 15
     permissions:
       security-events: write
@@ -166,7 +173,8 @@ jobs:
   audit:
     name: Backend dependency audit
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
+    # PR→main and merges to main only — not on every develop-dev push.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 10
     permissions:
       contents: read
@@ -358,6 +366,129 @@ jobs:
             echo "- **Frontend:** ${{ steps.frontend.outputs.url }}"
             echo "- **Commit:** \`${{ github.sha }}\`"
             echo "- Health checks passed for /health and /."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Deploy to DEVELOPMENT: only on a push to develop-dev ─────────────────
+  # A trimmed mirror of the prod `deploy` job that targets the separate
+  # root-and-fruit-dev project. The ONLY per-environment difference is
+  # GCP_PROJECT_ID, supplied by the GitHub `development` Environment
+  # (Settings → Environments → development → Variables → GCP_PROJECT_ID=
+  # root-and-fruit-dev). Region, WIF provider, and deploy SA are shared repo
+  # variables — the SA lives in prod but was granted cross-project deploy roles
+  # on the dev project (see scripts/bootstrap-env.sh). Because dev is a SEPARATE
+  # project, the service names can match prod with no collision.
+  #
+  # Any environment-scoped variable set on `development` (e.g. a dev-specific
+  # ALLOWED_ORIGIN) overrides the repo-level value for this job only — that is
+  # how you give dev its own CORS origin without touching prod's.
+  deploy-dev:
+    name: Deploy to Cloud Run (development)
+    needs: [test, docker-build, frontend-smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-dev'
+    environment: development
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read       # checkout
+      id-token: write       # required for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify deploy configuration is present
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID on the development Environment (Settings → Environments → development → Variables)}"
+          : "${GCP_REGION:?Set the GCP_REGION repo variable}"
+          : "${GCP_WIF_PROVIDER:?Set the GCP_WIF_PROVIDER repo variable}"
+          : "${GCP_DEPLOY_SA:?Set the GCP_DEPLOY_SA repo variable}"
+          echo "Deploying to $GCP_PROJECT_ID"
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Backend first (frontend needs its URL). Secrets resolve against the DEV
+      # project because that is where this job is deploying — same secret NAMES
+      # as prod (Option A), so this line is identical to the prod deploy.
+      - name: Deploy backend
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE" \
+            --source ./backend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 600Mi \
+            --max-instances 10 \
+            --timeout 600 \
+            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+
+      - name: Capture backend URL
+        id: backend
+        run: |
+          URL=$(gcloud run services describe "$BACKEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "Backend deployed at $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy frontend
+        id: frontend
+        run: |
+          gcloud run deploy "$FRONTEND_SERVICE" \
+            --source ./frontend \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 256Mi \
+            --max-instances 5 \
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+          URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Post-deploy smoke test
+        run: |
+          probe() {
+            local name="$1" url="$2"
+            for attempt in 1 2 3 4 5; do
+              if curl -fsS --max-time 20 "$url" > /dev/null; then
+                echo "✓ $name OK ($url)"
+                return 0
+              fi
+              echo "… $name not ready (attempt $attempt), retrying in 10s"
+              sleep 10
+            done
+            echo "✗ $name failed health check: $url"
+            return 1
+          }
+          probe "backend /health"  "${{ steps.backend.outputs.url }}/health"
+          probe "frontend /"       "${{ steps.frontend.outputs.url }}/"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Development deploy complete :rocket:"
+            echo ""
+            echo "- **Project:** \`${{ vars.GCP_PROJECT_ID }}\`"
+            echo "- **Backend:** ${{ steps.backend.outputs.url }}"
+            echo "- **Frontend:** ${{ steps.frontend.outputs.url }}"
+            echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Rollback: manual only (workflow_dispatch) ────────────────────────────
