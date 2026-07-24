@@ -22,12 +22,20 @@ name: CI/CD Pipeline
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
 # REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
 
-# pull_request / push run the gate jobs; only push reaches deploy (see the
-# `if:` guard on `deploy`). workflow_dispatch is the manual rollback path — it
-# runs ONLY the `rollback` job (the gate/deploy jobs are guarded off it).
+# Branch-promotion flow (dev validates before prod):
+#
+#   feature branch → PR to develop-dev : functional gates (test, docker-build,
+#                       frontend-smoke) block the merge.
+#   push develop-dev (merge)           : deploy to DEV, then run the Billion
+#                       Godson regression against the live dev app.
+#   feature branch → PR to main        : full gates (adds codeql + audit).
+#   push main (merge)                  : MANUAL APPROVAL (production Environment
+#                       protection) → deploy to PROD → post-deploy smoke →
+#                       AUTO-ROLLBACK on failure.
+#   workflow_dispatch                  : manual rollback path (rollback job only).
 on:
   pull_request:
-    branches: [main]
+    branches: [main, develop-dev]
   push:
     branches: [main, develop-dev]
   workflow_dispatch:
@@ -94,8 +102,8 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
-    # PR→main and merges to main only — not on every develop-dev push.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # PR→main and merges to main only — not on PRs to / pushes of develop-dev.
+    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 15
     permissions:
       security-events: write
@@ -173,8 +181,8 @@ jobs:
   audit:
     name: Backend dependency audit
     runs-on: ubuntu-latest
-    # PR→main and merges to main only — not on every develop-dev push.
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # PR→main and merges to main only — not on PRs to / pushes of develop-dev.
+    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 10
     permissions:
       contents: read
@@ -226,10 +234,18 @@ jobs:
         run: node test/smoke.mjs
 
   # ── Deploy: only after all gates pass, only on a merge to main ──────────
+  # `environment: production` is what enforces the MANUAL APPROVAL gate: add a
+  # required-reviewer protection rule to the production Environment in GitHub
+  # (Settings → Environments → production) and this job pauses for a human click
+  # before any step runs. GCP_PROJECT_ID has no production-scoped override, so it
+  # falls back to the repo-level value (root-and-fruit-app) — prod stays prod.
   deploy:
     name: Deploy to Cloud Run
     needs: [test, codeql, docker-build, audit, frontend-smoke]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ steps.frontend.outputs.url }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -265,15 +281,19 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       # Record the revision each service is serving BEFORE we overwrite it, so
-      # the manual rollback (workflow_dispatch) has a known-good target on file.
-      # Non-fatal on first deploy, when the services don't exist yet.
+      # both the auto-rollback step below and the manual rollback (workflow_
+      # dispatch) have a known-good target on file. Captured as step outputs.
+      # Empty on first deploy, when the services don't exist yet.
       - name: Record current (pre-deploy) revisions
+        id: prerev
         run: |
           for svc in "$BACKEND_SERVICE" "$FRONTEND_SERVICE"; do
             rev=$(gcloud run services describe "$svc" \
               --project "${{ vars.GCP_PROJECT_ID }}" \
               --region "${{ vars.GCP_REGION }}" \
               --format 'value(status.traffic[0].revisionName)' 2>/dev/null || true)
+            key=$([ "$svc" = "$BACKEND_SERVICE" ] && echo backend_prev || echo frontend_prev)
+            echo "${key}=${rev}" >> "$GITHUB_OUTPUT"
             echo "- **$svc** was serving: \`${rev:-none (first deploy)}\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -357,6 +377,32 @@ jobs:
           probe "backend /health"  "${{ steps.backend.outputs.url }}/health"
           probe "frontend /"       "${{ steps.frontend.outputs.url }}/"
 
+      # Auto-rollback: if ANY step above failed (a deploy error or a failed
+      # post-deploy smoke test), restore 100% traffic to the revision each
+      # service served before this run — captured in `prerev`. A `gcloud run
+      # deploy` shifts all traffic to the new revision immediately, so without
+      # this a bad-but-parseable revision would keep serving prod. Skipped for a
+      # service with no prior revision (first deploy — nothing to roll back to).
+      - name: Auto-rollback on failure
+        if: failure()
+        run: |
+          restore() {
+            local svc="$1" prev="$2"
+            if [ -z "$prev" ]; then
+              echo "::warning::$svc has no prior revision (first deploy) — cannot auto-rollback"
+              return 0
+            fi
+            echo "Rolling $svc back to $prev"
+            gcloud run services update-traffic "$svc" \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --region "${{ vars.GCP_REGION }}" \
+              --to-revisions "$prev=100"
+            echo "- **$svc** auto-rolled back to \`$prev\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+          echo "### :warning: Deploy failed — auto-rolling back" >> "$GITHUB_STEP_SUMMARY"
+          restore "$BACKEND_SERVICE"  "${{ steps.prerev.outputs.backend_prev }}"
+          restore "$FRONTEND_SERVICE" "${{ steps.prerev.outputs.frontend_prev }}"
+
       - name: Summary
         run: |
           {
@@ -391,6 +437,10 @@ jobs:
     permissions:
       contents: read       # checkout
       id-token: write       # required for Workload Identity Federation
+    # Exposed so the `regression` job can point the browser at the live dev app.
+    outputs:
+      frontend_url: ${{ steps.frontend.outputs.url }}
+      backend_url: ${{ steps.backend.outputs.url }}
     steps:
       - uses: actions/checkout@v5
 
@@ -490,6 +540,47 @@ jobs:
             echo "- **Frontend:** ${{ steps.frontend.outputs.url }}"
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Regression: Billion Godson audit against the live DEV app ────────────
+  # Runs after the dev deploy. Drives the deployed dev frontend in headless
+  # Chromium through a full Auto-Audit and asserts the verdict (see
+  # frontend/test/regression.mjs). This is the signal a human reads before
+  # promoting develop-dev → main: it does NOT block the dev deploy (already
+  # done), but a red result means "do not open/merge the promotion PR yet".
+  # Make it a required status check on the develop-dev → main PR to enforce that.
+  #
+  # Costs one real Anthropic audit (web search + thinking) per run — the
+  # intended trade for catching prompt/scoring regressions before prod.
+  #
+  # Set the EXPECTED_VERDICT repo variable to the known-good Billion Godson
+  # verdict to enforce an exact match; until then the job runs in sanity mode
+  # (asserts a real verdict rendered) and prints the actual verdict to lock in.
+  regression:
+    name: Dev regression (Billion Godson)
+    needs: deploy-dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      # regression.mjs imports only `playwright` — no other frontend deps, so
+      # install it ad-hoc (--no-save) rather than running the full npm ci.
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: |
+          npm i -D --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Run Billion Godson regression against dev
+        working-directory: frontend
+        env:
+          FRONTEND_URL: ${{ needs.deploy-dev.outputs.frontend_url }}
+          EXPECTED_VERDICT: ${{ vars.EXPECTED_VERDICT }}
+        run: node test/regression.mjs
 
   # ── Rollback: manual only (workflow_dispatch) ────────────────────────────
   # Cloud Run keeps every revision; this reroutes 100% of traffic to a prior
