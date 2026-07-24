@@ -117,13 +117,18 @@ COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 echo "  Compute default SA: ${COMPUTE_SA}"
 
 # ── 2. Deploy SA cross-project roles (build + deploy here) ───────────────────
+# serviceusage.serviceUsageConsumer is REQUIRED for cross-project source deploys:
+# the deploy SA lives in the prod project, and Cloud Build bills/quotas the build
+# against THIS (target) project, so the caller must be allowed to "use" it. Prod
+# never needed it because there the SA and project are the same.
 step "Granting deploy SA the deploy roles on ${PROJECT_ID}"
 for role in \
   roles/run.admin \
   roles/cloudbuild.builds.editor \
   roles/artifactregistry.admin \
   roles/storage.admin \
-  roles/iam.serviceAccountUser; do
+  roles/iam.serviceAccountUser \
+  roles/serviceusage.serviceUsageConsumer; do
   grant "$PROJECT_ID" "$DEPLOY_SA" "$role"
 done
 

@@ -51,6 +51,16 @@ async function run() {
     console.log(`→ Loading ${FRONTEND_URL}`);
     await page.goto(FRONTEND_URL, { waitUntil: 'networkidle', timeout: 60000 });
 
+    // Dismiss the splash/onboarding+registration overlay — it covers the page on
+    // load and intercepts pointer events, so the Auto-Analyze click never lands.
+    // The app itself hides it (initSplash) when sessionStorage.rfRegistered is
+    // set; we mirror that returning-user path and also force the hidden class as
+    // a belt-and-suspenders in case initSplash has already run.
+    await page.evaluate(() => {
+      try { sessionStorage.setItem('rfRegistered', '1'); } catch (e) { /* ignore */ }
+      document.getElementById('splashOverlay')?.classList.add('hidden');
+    });
+
     // Results view is the default; the subject input + Auto-Analyze live there.
     await page.fill('#nameInput', SUBJECT);
     console.log(`→ Running Auto-Audit for "${SUBJECT}" (up to ${Math.round(AUDIT_TIMEOUT_MS / 1000)}s)…`);
