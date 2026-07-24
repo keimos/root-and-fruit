@@ -66,15 +66,18 @@ async function run() {
     console.log(`→ Running Auto-Audit for "${SUBJECT}" (up to ${Math.round(AUDIT_TIMEOUT_MS / 1000)}s)…`);
     await page.click('#analyzeBtn');
 
-    // Race the two terminal outcomes: a verdict renders (#verdictTitle leaves
-    // its "UNGRADED" default) or the app surfaces an error (#errorBox shown).
+    // Wait for the AUDIT to actually complete: the report renders into
+    // #auditContent (empty until renderAuditReport runs), or the app errors.
+    // NB: #verdictTitle is NOT a valid completion signal — the page runs
+    // calculate() on load, so it already shows "THE MISALIGNED" (score 0)
+    // before any audit runs. Keying on it reads the pristine form, not the audit.
     await page.waitForFunction(
       () => {
-        const v = document.getElementById('verdictTitle');
+        const report = document.getElementById('auditContent');
         const err = document.getElementById('errorBox');
-        const verdictReady = v && v.textContent.trim() && v.textContent.trim() !== 'UNGRADED';
+        const reportReady = report && report.textContent.trim().length > 200;
         const errorShown = err && err.style.display === 'block' && err.textContent.trim();
-        return verdictReady || errorShown;
+        return reportReady || errorShown;
       },
       { timeout: AUDIT_TIMEOUT_MS, polling: 2000 }
     );
