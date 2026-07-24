@@ -51,21 +51,36 @@ async function run() {
     console.log(`→ Loading ${FRONTEND_URL}`);
     await page.goto(FRONTEND_URL, { waitUntil: 'networkidle', timeout: 60000 });
 
+    // Dismiss the splash/onboarding+registration overlay — it covers the page on
+    // load and intercepts pointer events, so the Auto-Analyze click never lands.
+    // The app itself hides it (initSplash) when sessionStorage.rfRegistered is
+    // set; we mirror that returning-user path and also force the hidden class as
+    // a belt-and-suspenders in case initSplash has already run.
+    await page.evaluate(() => {
+      try { sessionStorage.setItem('rfRegistered', '1'); } catch (e) { /* ignore */ }
+      document.getElementById('splashOverlay')?.classList.add('hidden');
+    });
+
     // Results view is the default; the subject input + Auto-Analyze live there.
     await page.fill('#nameInput', SUBJECT);
     console.log(`→ Running Auto-Audit for "${SUBJECT}" (up to ${Math.round(AUDIT_TIMEOUT_MS / 1000)}s)…`);
     await page.click('#analyzeBtn');
 
-    // Race the two terminal outcomes: a verdict renders (#verdictTitle leaves
-    // its "UNGRADED" default) or the app surfaces an error (#errorBox shown).
+    // Wait for the AUDIT to actually complete: the report renders into
+    // #auditContent (empty until renderAuditReport runs), or the app errors.
+    // NB: #verdictTitle is NOT a valid completion signal — the page runs
+    // calculate() on load, so it already shows "THE MISALIGNED" (score 0)
+    // before any audit runs. Keying on it reads the pristine form, not the audit.
     await page.waitForFunction(
       () => {
-        const v = document.getElementById('verdictTitle');
+        const report = document.getElementById('auditContent');
         const err = document.getElementById('errorBox');
-        const verdictReady = v && v.textContent.trim() && v.textContent.trim() !== 'UNGRADED';
+        const reportReady = report && report.textContent.trim().length > 200;
         const errorShown = err && err.style.display === 'block' && err.textContent.trim();
-        return verdictReady || errorShown;
+        return reportReady || errorShown;
       },
+      null, // no page-function arg — options MUST be the 3rd param, else timeout
+            // silently falls back to Playwright's 30s default.
       { timeout: AUDIT_TIMEOUT_MS, polling: 2000 }
     );
 
@@ -74,6 +89,26 @@ async function run() {
       return err && err.style.display === 'block' ? err.textContent.trim() : '';
     });
     if (errorText) fail(`app reported an error: "${errorText}"`);
+
+    // The audit applies via an animated ramp — checkboxes flip and sliders climb
+    // from 0 over a few seconds — so #finalScore / #verdictTitle pass through
+    // intermediate values, notably a premature 0/57 → "THE MISALIGNED". Wait for
+    // the score to SETTLE (unchanged for a few seconds) before reading, so we
+    // capture the real result instead of a mid-animation frame.
+    console.log('→ Verdict rendering; waiting for the score to settle…');
+    await page.waitForFunction(
+      (stableMs) => {
+        const el = document.getElementById('finalScore');
+        if (!el) return false;
+        const now = parseInt(el.textContent, 10);
+        const w = window.__rfSettle || (window.__rfSettle = { last: NaN, since: 0 });
+        const t = performance.now();
+        if (now !== w.last) { w.last = now; w.since = t; return false; }
+        return t - w.since >= stableMs;
+      },
+      4000, // require 4s with no change
+      { timeout: AUDIT_TIMEOUT_MS, polling: 400 }
+    );
 
     const verdict = (await page.textContent('#verdictTitle')).trim();
     const scoreText = (await page.textContent('#finalScore')).trim(); // e.g. "37/57"
