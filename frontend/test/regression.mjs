@@ -79,6 +79,8 @@ async function run() {
         const errorShown = err && err.style.display === 'block' && err.textContent.trim();
         return reportReady || errorShown;
       },
+      null, // no page-function arg — options MUST be the 3rd param, else timeout
+            // silently falls back to Playwright's 30s default.
       { timeout: AUDIT_TIMEOUT_MS, polling: 2000 }
     );
 
