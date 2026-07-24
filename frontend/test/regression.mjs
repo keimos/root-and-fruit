@@ -85,6 +85,26 @@ async function run() {
     });
     if (errorText) fail(`app reported an error: "${errorText}"`);
 
+    // The audit applies via an animated ramp — checkboxes flip and sliders climb
+    // from 0 over a few seconds — so #finalScore / #verdictTitle pass through
+    // intermediate values, notably a premature 0/57 → "THE MISALIGNED". Wait for
+    // the score to SETTLE (unchanged for a few seconds) before reading, so we
+    // capture the real result instead of a mid-animation frame.
+    console.log('→ Verdict rendering; waiting for the score to settle…');
+    await page.waitForFunction(
+      (stableMs) => {
+        const el = document.getElementById('finalScore');
+        if (!el) return false;
+        const now = parseInt(el.textContent, 10);
+        const w = window.__rfSettle || (window.__rfSettle = { last: NaN, since: 0 });
+        const t = performance.now();
+        if (now !== w.last) { w.last = now; w.since = t; return false; }
+        return t - w.since >= stableMs;
+      },
+      4000, // require 4s with no change
+      { timeout: AUDIT_TIMEOUT_MS, polling: 400 }
+    );
+
     const verdict = (await page.textContent('#verdictTitle')).trim();
     const scoreText = (await page.textContent('#finalScore')).trim(); // e.g. "37/57"
     const score = parseInt(scoreText, 10);
