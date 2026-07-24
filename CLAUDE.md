@@ -43,6 +43,11 @@ root-and-fruit/
 │   ├── server.js         ← static server + runtime config injection
 │   ├── Dockerfile
 │   └── package.json
+├── scripts/
+│   └── bootstrap-env.sh  ← idempotent one-time GCP setup for the dev project
+├── specs/                ← lightweight, spec-first feature notes
+│   ├── README.md         ← the workflow
+│   └── TEMPLATE.md       ← copy → specs/NNNN-slug.md per feature
 └── .gitignore
 ```
 
@@ -438,6 +443,26 @@ function escapeHtml(v) { /* … */ }
 - Typography: Bebas Neue (display), DM Sans (body), DM Mono (labels/badges). All loaded from Google Fonts CDN.
 - Decorative grain overlay is implemented as an inline-SVG noise filter on `body::before`.
 - Inline styles (`style="..."`) are used freely inside the dynamically-rendered audit report — keep them; don't add a CSS framework.
+
+---
+
+## Feature Specs (spec-first)
+
+Non-trivial features start with a short spec in [`specs/`](specs/), copied from
+[`specs/TEMPLATE.md`](specs/TEMPLATE.md) to `specs/NNNN-slug.md`. This is
+deliberately lightweight — the goal is one pass over the project's hard
+constraints (single-file frontend, the locked prompt, the scoring invariants)
+**before** code, not ceremony. A spec longer than the change is a smell.
+
+- The template's **§3 Guardrails** checklist maps each tick to a rule in this
+  file; a ticked box must be covered in the spec's **§6 Regression & tests**.
+  In particular, a locked-prompt change requires the Billion Godson regression
+  (see [Locked Prompt](#locked-prompt--do-not-casually-modify)).
+- Implement against the spec using Claude Code **plan mode**; ship via the
+  dev-first pipeline (see [Deployment](#deployment)).
+- **Skip a spec** for typo/copy fixes, dependency bumps, and pure-infra chores.
+  When in doubt for anything touching scoring, the prompt, or the audit flow,
+  write one. See [`specs/README.md`](specs/README.md) for the full workflow.
 
 ---
 
