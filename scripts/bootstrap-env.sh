@@ -50,6 +50,9 @@ DEPLOY_SA="deploy-sa@${PROD_PROJECT}.iam.gserviceaccount.com"       # the SA Git
 FIRESTORE_LOCATION="us-east1"                                       # match prod
 SECRET_ANTHROPIC="anthropic-api-key"                                # same name per project (Option A)
 SECRET_RESEND="resend-api-key"
+IMAGE_PROJECT="$PROD_PROJECT"                                       # hosts the shared build-once image registry
+IMAGE_REPO="rf-images"
+RUN_REGION="us-central1"                                            # Cloud Run + Artifact Registry region (matches GCP_REGION)
 
 # step MSG — print a section banner.
 # in:  MSG (string)
@@ -141,6 +144,30 @@ for role in \
   roles/secretmanager.secretAccessor; do
   grant "$PROJECT_ID" "$COMPUTE_SA" "$role"
 done
+
+# ── 3b. Shared build-once image registry (cross-project pull) ─────────────────
+# CI builds images ONCE and pushes them to a shared Artifact Registry repo in the
+# IMAGE_PROJECT (prod); dev validates that exact image and prod promotes it. This
+# env's Cloud Run service agent must be able to PULL from that repo. The repo
+# itself lives in IMAGE_PROJECT — created idempotently here (a no-op when this is
+# the prod project or the repo already exists).
+step "Ensuring the shared image registry + this env's pull access"
+if gcloud artifacts repositories describe "$IMAGE_REPO" \
+     --project "$IMAGE_PROJECT" --location "$RUN_REGION" >/dev/null 2>&1; then
+  echo "  – repo ${IMAGE_PROJECT}/${IMAGE_REPO} already exists"
+else
+  gcloud artifacts repositories create "$IMAGE_REPO" \
+    --project "$IMAGE_PROJECT" --location "$RUN_REGION" \
+    --repository-format=docker \
+    --description="Shared build-once images (dev validates, prod promotes)"
+  echo "  ✓ created ${IMAGE_PROJECT}/${IMAGE_REPO}"
+fi
+# Cloud Run pulls images as the per-project serverless service agent.
+RUN_AGENT="service-${PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com"
+gcloud artifacts repositories add-iam-policy-binding "$IMAGE_REPO" \
+  --project "$IMAGE_PROJECT" --location "$RUN_REGION" \
+  --member="serviceAccount:${RUN_AGENT}" --role="roles/artifactregistry.reader" --quiet >/dev/null
+echo "  ✓ ${RUN_AGENT} → artifactregistry.reader on ${IMAGE_REPO}"
 
 # ── 4. Firestore Native DB + audits composite index ──────────────────────────
 step "Ensuring Firestore Native database (${FIRESTORE_LOCATION})"
