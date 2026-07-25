@@ -263,27 +263,41 @@ app.post('/api/analyze', async (req, res) => {
 
 // ── Auxiliary web-search lookups (Legislative Scrubber, Electability) ──
 // Lighter-weight sibling of /api/analyze: no adaptive thinking (these are
-// structured extract-from-search tasks, not reasoning), smaller token budget,
-// caller supplies its own system prompt + messages. Keeps the API key
-// server-side — the frontend never talks to api.anthropic.com directly.
+// structured extract-from-search tasks, not reasoning), smaller token budget.
+//
+// Injection fix (same as /api/analyze): the client sends only a `task` name +
+// subject `name`; the system prompt + messages are assembled HERE from the
+// fixed per-task templates in lib/prompts.js. A caller hitting this endpoint
+// directly can NO LONGER supply or override the system prompt — so it can't be
+// used as an open Anthropic proxy on our key. Any client `system`/`messages`
+// in the body are ignored.
 app.post('/api/search', async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
-  const { messages, system } = req.body;
-  if (!messages?.length) return res.status(400).json({ error: 'messages required' });
-  if (promptSize(system, messages) > LIMITS.promptChars) {
+  const { task, name } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name required' });
+  }
+  const built = prompts.buildSearchRequest(task, { name: name.trim() });
+  if (!built) {
+    return res.status(400).json({ error: 'unknown task' });
+  }
+
+  // Guardrails still apply — bound the assembled prompt (the subject name is the
+  // only client lever) and clamp the token budget. Search rounds are fixed by
+  // the task, then clamped to the server ceiling for defense in depth.
+  if (promptSize(built.system, built.messages) > LIMITS.promptChars) {
     return res.status(413).json({ error: 'prompt too large' });
   }
-  // Clamp both client-supplied knobs into safe server ranges.
   const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.searchMaxTokens, 3000);
-  const max_uses = clampInt(req.body.max_uses, 1, LIMITS.searchMaxUses, 4);
+  const max_uses = clampInt(built.maxUses, 1, LIMITS.searchMaxUses, 4);
 
   try {
     const message = await withRetry(() => anthropic.messages.create({
       model: MODEL,
       max_tokens,
-      system,
-      messages,
+      system: built.system,
+      messages: built.messages,
       tools: [
         { type: 'web_search_20260209', name: 'web_search', max_uses }
       ]

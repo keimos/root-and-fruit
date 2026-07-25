@@ -211,7 +211,102 @@ function validateAudit(obj) {
   return { ok: errors.length === 0, errors };
 }
 
+// ── /api/search prompts (Legislative Scrubber + Electability) ──────────────
+// Injection fix: these were previously built in the frontend and POSTed to
+// /api/search as raw { system, messages }, so a direct caller could supply ANY
+// system prompt and run it against the Anthropic API on our key. They now live
+// here and are assembled server-side from just the subject name; /api/search no
+// longer accepts a client system/messages. Ports are byte-for-byte from the
+// frontend runLegislativeScrubber / runElectabilityScore originals.
+
+const SCRUBBER_SYSTEM = 'You are a legislative research analyst. Search thoroughly and return ONLY valid JSON — no markdown fences, no prose.';
+const ELECTABILITY_SYSTEM = 'You are an electoral analyst. Search for current polling data and return ONLY valid JSON — no markdown fences, no prose.';
+
+/**
+ * Build the Legislative Scrubber user prompt for a subject.
+ * @param {string} name  subject name (already trimmed)
+ * @returns {string} the scrubber prompt (byte-for-byte the frontend original)
+ */
+function buildScrubberPrompt(name) {
+  return `Search for and compile the legislative and public record of "${name}" specifically related to these five policy areas:
+1. Criminal Justice & Anti-Carceral Policy (votes, bills, statements on policing, incarceration, bail reform, police accountability)
+2. Economic Transfer & Reparations (votes, bills, statements on reparations, wealth transfer, direct community investment)
+3. Housing & Tenant Protections (votes, bills, statements on affordable housing, eviction protections, homelessness)
+4. Community Institutions & CBO Funding (votes, bills, statements on nonprofit funding, faith-based organizations, community power)
+5. Intergenerational Wealth & Asset Building (votes, bills, statements on land ownership, endowments, legacy assets)
+
+For each item found, identify the type ("vote", "bill", or "statement"), the specific action taken, the date or approximate year, and whether it was PRO or CON community interests.
+
+Return ONLY valid JSON:
+{
+  "criteria": [
+    {"area": "Criminal Justice & Anti-Carceral", "items": [{"type": "vote|bill|statement", "description": "specific action", "date": "year or date", "stance": "pro|con|mixed"}]},
+    {"area": "Economic Transfer & Reparations", "items": []},
+    {"area": "Housing & Tenant Protections", "items": []},
+    {"area": "Community Institutions & CBO Funding", "items": []},
+    {"area": "Intergenerational Wealth & Asset Building", "items": []}
+  ],
+  "summary": "1-2 sentence overall legislative record summary"
+}`;
+}
+
+/**
+ * Build the Electability Rating user prompt for a subject.
+ * @param {string} name  subject name (already trimmed)
+ * @returns {string} the electability prompt (byte-for-byte the frontend original)
+ */
+function buildElectabilityPrompt(name) {
+  return `Search for current polling data and electoral viability information for "${name}".
+
+Find current poll standings (% support), name recognition/favorability if available, electoral context (incumbent, challenger, frontrunner, underdog), and any trend (rising, falling, stable). Then assign an Electability Rating from 0-10:
+0-2 = No viable path, unknown, or deeply unfavorable
+3-4 = Long shot, limited name recognition or support
+5-6 = Competitive, real chance but significant obstacles
+7-8 = Strong contender, polling well or strong structural advantages
+9-10 = Heavy favorite, dominant polling position
+
+Return ONLY valid JSON:
+{
+  "score": 0,
+  "tier": "Heavy Favorite|Strong Contender|Competitive|Long Shot|Not Viable",
+  "context": "1-2 sentence summary of electoral standing",
+  "polls": [{"source": "poll name or source", "result": "X%", "date": "date or timeframe"}],
+  "trend": "rising|falling|stable|unknown"
+}`;
+}
+
+// Task → { system, buildUser, maxUses }. Adding a task here is the ONLY way to
+// add a /api/search capability — there is no client-controlled prompt path.
+const SEARCH_TASKS = {
+  scrubber:     { system: SCRUBBER_SYSTEM,     buildUser: buildScrubberPrompt,     maxUses: 5 },
+  electability: { system: ELECTABILITY_SYSTEM, buildUser: buildElectabilityPrompt, maxUses: 4 },
+};
+
+/**
+ * Assemble a full /api/search request from a task name + subject, server-side.
+ * @param {string} task  one of the SEARCH_TASKS keys ('scrubber' | 'electability')
+ * @param {object} opts
+ * @param {string} opts.name  subject name (already trimmed)
+ * @returns {{system: string, messages: Array, maxUses: number}|null}
+ *          the request pieces, or null for an unknown task. The system message
+ *          gets the same anti-injection suffix as the audit when
+ *          RF_DELIMIT_SUBJECT=1 (staged off by default — no text change).
+ */
+function buildSearchRequest(task, opts = {}) {
+  const spec = SEARCH_TASKS[task];
+  if (!spec) return null;
+  const name = opts.name;
+  const system = DELIMIT_SUBJECT ? spec.system + ANTI_INJECTION_SUFFIX : spec.system;
+  return {
+    system,
+    messages: [{ role: 'user', content: spec.buildUser(name) }],
+    maxUses: spec.maxUses,
+  };
+}
+
 module.exports = {
   buildAuditTarget, buildAuditPrompt, analyzeSystem, ANALYZE_SYSTEM, DELIMIT_SUBJECT,
-  parseAuditFromMessage, validateAudit
+  parseAuditFromMessage, validateAudit,
+  SCRUBBER_SYSTEM, ELECTABILITY_SYSTEM, buildScrubberPrompt, buildElectabilityPrompt,
+  buildSearchRequest,
 };

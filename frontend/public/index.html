@@ -3824,38 +3824,15 @@ async function runLegislativeScrubber(target) {
   const rescrub = document.getElementById('rescrubBtn');
   if (rescrub) rescrub.disabled = true;
 
-  const scrubPrompt = `Search for and compile the legislative and public record of "${name}" specifically related to these five policy areas:
-1. Criminal Justice & Anti-Carceral Policy (votes, bills, statements on policing, incarceration, bail reform, police accountability)
-2. Economic Transfer & Reparations (votes, bills, statements on reparations, wealth transfer, direct community investment)
-3. Housing & Tenant Protections (votes, bills, statements on affordable housing, eviction protections, homelessness)
-4. Community Institutions & CBO Funding (votes, bills, statements on nonprofit funding, faith-based organizations, community power)
-5. Intergenerational Wealth & Asset Building (votes, bills, statements on land ownership, endowments, legacy assets)
-
-For each item found, identify the type ("vote", "bill", or "statement"), the specific action taken, the date or approximate year, and whether it was PRO or CON community interests.
-
-Return ONLY valid JSON:
-{
-  "criteria": [
-    {"area": "Criminal Justice & Anti-Carceral", "items": [{"type": "vote|bill|statement", "description": "specific action", "date": "year or date", "stance": "pro|con|mixed"}]},
-    {"area": "Economic Transfer & Reparations", "items": []},
-    {"area": "Housing & Tenant Protections", "items": []},
-    {"area": "Community Institutions & CBO Funding", "items": []},
-    {"area": "Intergenerational Wealth & Asset Building", "items": []}
-  ],
-  "summary": "1-2 sentence overall legislative record summary"
-}`;
-
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    // The scrubber prompt + system now live server-side (backend lib/prompts.js);
+    // we send only the task + subject so the backend can't be driven as an open
+    // LLM proxy. The backend fixes max_tokens/max_uses for this task.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        max_tokens: 3000,
-        max_uses: 5,
-        system: 'You are a legislative research analyst. Search thoroughly and return ONLY valid JSON — no markdown fences, no prose.',
-        messages: [{ role: 'user', content: scrubPrompt }]
-      })
+      body: JSON.stringify({ task: 'scrubber', name })
     });
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
@@ -3906,38 +3883,16 @@ async function runElectabilityScore() {
   const btn = document.getElementById('reelectBtn');
   if (btn) btn.disabled = true;
 
-  const electPrompt = `Search for current polling data and electoral viability information for "${name}".
-
-Find current poll standings (% support), name recognition/favorability if available, electoral context (incumbent, challenger, frontrunner, underdog), and any trend (rising, falling, stable). Then assign an Electability Rating from 0-10:
-0-2 = No viable path, unknown, or deeply unfavorable
-3-4 = Long shot, limited name recognition or support
-5-6 = Competitive, real chance but significant obstacles
-7-8 = Strong contender, polling well or strong structural advantages
-9-10 = Heavy favorite, dominant polling position
-
-Return ONLY valid JSON:
-{
-  "score": 0,
-  "tier": "Heavy Favorite|Strong Contender|Competitive|Long Shot|Not Viable",
-  "context": "1-2 sentence summary of electoral standing",
-  "polls": [{"source": "poll name or source", "result": "X%", "date": "date or timeframe"}],
-  "trend": "rising|falling|stable|unknown"
-}`;
-
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    // The electability prompt + system now live server-side (backend
+    // lib/prompts.js); we send only the task + subject so the backend can't be
+    // driven as an open LLM proxy. The backend fixes max_tokens (3000, so a
+    // longer summary + several polls don't truncate the JSON) and max_uses.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        // 3000 (the /api/search default) so a longer context summary + several
-        // polls don't truncate the JSON mid-object — a truncated response has no
-        // closing brace and extractJSON throws "Could not parse JSON from response".
-        max_tokens: 3000,
-        max_uses: 4,
-        system: 'You are an electoral analyst. Search for current polling data and return ONLY valid JSON — no markdown fences, no prose.',
-        messages: [{ role: 'user', content: electPrompt }]
-      })
+      body: JSON.stringify({ task: 'electability', name })
     });
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
