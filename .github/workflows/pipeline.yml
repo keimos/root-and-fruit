@@ -22,22 +22,27 @@ name: CI/CD Pipeline
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
 # REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
 
-# Branch-promotion flow (dev validates before prod):
+# Branch → dev, main → prod:
 #
-#   feature branch → PR to develop-dev : functional gates (test, docker-build,
-#                       frontend-smoke) block the merge.
-#   push develop-dev (merge)           : deploy to DEV, then run the Billion
-#                       Godson regression against the live dev app.
-#   feature branch → PR to main        : full gates (adds codeql + audit).
-#   push main (merge)                  : MANUAL APPROVAL (production Environment
-#                       protection) → deploy to PROD → post-deploy smoke →
-#                       AUTO-ROLLBACK on failure.
-#   workflow_dispatch                  : manual rollback path (rollback job only).
+#   push ANY non-main branch : gates (test, CodeQL, docker-build, audit,
+#                       frontend-smoke) → build image once → deploy to the
+#                       DEVELOPMENT environment. The Billion Godson regression is
+#                       OPT-IN — it runs only when the commit message contains
+#                       `[regression]`.
+#   push main (merge)        : gates → MANUAL APPROVAL (production Environment
+#                       protection) → PROMOTE the exact image the branch built +
+#                       validated in dev (build-once-promote) → post-deploy smoke
+#                       → AUTO-ROLLBACK on failure.
+#   pull_request → main      : gates only (PR checks).
+#   workflow_dispatch        : manual rollback path (rollback job only).
+#
+# NOTE: every non-main branch deploys to the ONE shared dev environment, so two
+# branches deploying at once overwrite each other (last push wins).
 on:
   pull_request:
-    branches: [main, develop-dev]
+    branches: [main]
   push:
-    branches: [main, develop-dev]
+    branches: ['**']
   workflow_dispatch:
     inputs:
       service:
@@ -50,11 +55,11 @@ on:
         required: false
         default: ''
 
-# Cancel superseded PR runs; serialize (don't cancel) runs on main so a deploy
-# is never interrupted mid-flight.
+# Cancel superseded PR and feature-branch runs; serialize (don't cancel) runs on
+# main so a prod deploy is never interrupted mid-flight.
 concurrency:
   group: pipeline-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 
 # Cloud Run service names. Changing one creates a NEW service on the next
 # deploy — the old one keeps running (and billing) until deleted manually.
@@ -112,8 +117,8 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
-    # PR→main and merges to main only — not on PRs to / pushes of develop-dev.
-    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Runs on every branch push + PR (a gate for the dev deploy and the prod merge).
+    if: github.event_name != 'workflow_dispatch'
     timeout-minutes: 15
     permissions:
       security-events: write
@@ -191,8 +196,8 @@ jobs:
   audit:
     name: Backend dependency audit
     runs-on: ubuntu-latest
-    # PR→main and merges to main only — not on PRs to / pushes of develop-dev.
-    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Runs on every branch push + PR (a gate for the dev deploy and the prod merge).
+    if: github.event_name != 'workflow_dispatch'
     timeout-minutes: 10
     permissions:
       contents: read
@@ -244,18 +249,18 @@ jobs:
         run: node test/smoke.mjs
 
   # ── Build once: push SHA-tagged images to the shared registry ───────────
-  # Runs on a develop-dev push (in parallel with the gates). Builds both images
+  # Runs on a push to any non-main branch (after the gates). Builds both images
   # on the runner and pushes them to the SHARED Artifact Registry repo tagged by
-  # commit SHA. deploy-dev then deploys these exact images, and — because
-  # develop-dev → main is a merge commit — the prod deploy promotes the very
-  # same SHA-tagged image (the merge's second parent). One build, validated in
-  # dev, shipped to prod. Auth uses the shared deploy SA (artifactregistry.admin
-  # on the image project), so no environment override is needed here.
+  # commit SHA. deploy-dev then deploys these exact images, and — because merging
+  # the branch → main is a merge commit — the prod deploy promotes the very same
+  # SHA-tagged image (the merge's second parent). One build, validated in dev,
+  # shipped to prod. Auth uses the shared deploy SA (artifactregistry.admin on
+  # the image project), so no environment override is needed here.
   build-images:
     name: Build + push images
     needs: [test, docker-build, frontend-smoke]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-dev'
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     timeout-minutes: 20
     permissions:
       contents: read
@@ -508,7 +513,7 @@ jobs:
             echo "- Health checks passed for /health and /."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Deploy to DEVELOPMENT: only on a push to develop-dev ─────────────────
+  # ── Deploy to DEVELOPMENT: on a push to ANY non-main branch ──────────────
   # A trimmed mirror of the prod `deploy` job that targets the separate
   # root-and-fruit-dev project. The ONLY per-environment difference is
   # GCP_PROJECT_ID, supplied by the GitHub `development` Environment
@@ -524,7 +529,7 @@ jobs:
   deploy-dev:
     name: Deploy to Cloud Run (development)
     needs: [test, docker-build, frontend-smoke, build-images]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-dev'
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     environment: development
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -639,16 +644,15 @@ jobs:
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Regression: Billion Godson audit against the live DEV app ────────────
-  # Runs after the dev deploy. Drives the deployed dev frontend in headless
-  # Chromium through a full Auto-Audit and asserts the verdict (see
-  # frontend/test/regression.mjs). This is the signal a human reads before
-  # promoting develop-dev → main: it does NOT block the dev deploy (already
-  # done), but a red result means "do not open/merge the promotion PR yet".
-  # Make it a required status check on the develop-dev → main PR to enforce that.
+  # ── Regression: Billion Godson audit against the live DEV app (OPT-IN) ───
+  # Runs after the dev deploy ONLY when the pushed commit message contains
+  # `[regression]` — it's opt-in so it doesn't spend a real Anthropic audit on
+  # every branch push. Drives the deployed dev frontend in headless Chromium
+  # through a full Auto-Audit and asserts the verdict (frontend/test/
+  # regression.mjs). Informational: it does not block the dev deploy or the prod
+  # merge; read the verdict before you promote.
   #
-  # Costs one real Anthropic audit (web search + thinking) per run — the
-  # intended trade for catching prompt/scoring regressions before prod.
+  # Costs one real Anthropic audit (web search + thinking) per run.
   #
   # Set the EXPECTED_VERDICT repo variable to the known-good Billion Godson
   # verdict to enforce an exact match; until then the job runs in sanity mode
@@ -656,7 +660,7 @@ jobs:
   regression:
     name: Dev regression (Billion Godson)
     needs: deploy-dev
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop-dev'
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[regression]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
