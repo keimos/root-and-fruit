@@ -8,6 +8,7 @@ const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
 const prompts = require('./lib/prompts');
+const { buildLimiters } = require('./lib/rateLimit');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -169,12 +170,25 @@ const db = new Firestore({ projectId: PROJECT_ID });
 const COLLECTION = 'audits';
 
 // ── Middleware ─────────────────────────────────────────
+// Cloud Run terminates TLS at Google's front end and forwards the real client
+// IP in X-Forwarded-For. Trust that single proxy hop so the rate limiter keys
+// on the actual client, not the shared front-end address. Override the hop
+// count with TRUST_PROXY_HOPS if the platform inserts more proxies.
+app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
+
 app.use(express.json({ limit: '2mb' }));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// ── Rate limiting (Option A: per-instance in-memory backstop) ──
+// Blanket cap over every /api/* route; stricter per-route limiters (below) stack
+// on top of it for the billed Anthropic calls and the email-sending register
+// route. See lib/rateLimit.js for the per-instance caveat.
+const limiters = buildLimiters();
+app.use('/api/', limiters.api);
 
 // ── Health check ───────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
@@ -184,7 +198,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 // Uses adaptive thinking + server-side web_search so the model
 // can verify claims against current sources instead of relying
 // solely on its training cutoff.
-app.post('/api/analyze', async (req, res) => {
+app.post('/api/analyze', limiters.ai, async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   // Injection fix #1: the client sends only structured subject fields — the
@@ -271,7 +285,7 @@ app.post('/api/analyze', async (req, res) => {
 // directly can NO LONGER supply or override the system prompt — so it can't be
 // used as an open Anthropic proxy on our key. Any client `system`/`messages`
 // in the body are ignored.
-app.post('/api/search', async (req, res) => {
+app.post('/api/search', limiters.ai, async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   const { task, name } = req.body || {};
@@ -314,7 +328,7 @@ app.post('/api/search', async (req, res) => {
 // Persists every registration to Firestore first so a lead is never lost,
 // then sends a team notification + registrant auto-reply via Resend.
 // Email is best-effort: a delivery failure does not fail the request.
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', limiters.register, async (req, res) => {
   const { name, email, phone, org, isEvent, eventName, eventLocation, eventDate } = req.body || {};
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email || '');
   if (!name || !emailValid) return res.status(400).json({ error: 'Valid name and email required' });
