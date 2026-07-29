@@ -223,6 +223,12 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 `cors({ origin: ALLOWED_ORIGIN || '*' })` — wide-open by default, intentionally. Tighten by setting `ALLOWED_ORIGIN` to the frontend's Cloud Run URL once the domain is final.
 
+### Rate limiting
+
+`backend/lib/rateLimit.js` (built via `buildLimiters()`) mounts `express-rate-limit` over `/api/*`: a blanket cap (`RATE_LIMIT_API`, 100/min) plus stricter per-route limiters on the billed Anthropic routes (`RATE_LIMIT_AI`, 15/min on `/api/analyze` + `/api/search`) and the email-sending `/api/register` (`RATE_LIMIT_REGISTER`, 5/min). Windows and limits are env-tunable; `app.set('trust proxy', …)` keys the limiter on the real client IP behind Cloud Run's front end.
+
+> **Per-instance caveat.** This uses the default **in-memory** store, so counters are per Cloud Run instance — the real ceiling is up to `max-instances × limit`, not a precise global quota. It's a deliberate, stateless-friendly cost/abuse backstop (no Firestore/Redis round-trip per request), **not** a hard global cap. For an exact global limit, back the money routes with a shared store (Firestore/Redis); for volumetric/DDoS protection, add an edge limiter (Cloud Armor in front of an HTTPS LB, with ingress locked to `internal-and-cloud-load-balancing`). The two layers are complementary.
+
 ### Anthropic call shape
 
 ```js
@@ -250,6 +256,11 @@ anthropic.messages.stream({
 | `DONATION_URL`          | no      | Donation CTA link in the registrant auto-reply email. If unset, the auto-reply omits the donation line entirely (rather than shipping a placeholder). Set to the live donation URL (e.g. `https://anvilinstitute.org/give`) in production. |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
 | `ALLOWED_ORIGIN`        | no      | CORS origin allowlist. Defaults to `*`.                                                      |
+| `RATE_LIMIT_AI`         | no      | Max `/api/analyze` + `/api/search` requests per window per client IP. Defaults to `15`.       |
+| `RATE_LIMIT_REGISTER`   | no      | Max `/api/register` requests per window per client IP. Defaults to `5`.                       |
+| `RATE_LIMIT_API`        | no      | Blanket cap over the rest of `/api/*` per window per client IP. Defaults to `100`.           |
+| `RATE_LIMIT_WINDOW_MS`  | no      | Rate-limit window length in ms. Defaults to `60000` (1 min).                                 |
+| `TRUST_PROXY_HOPS`      | no      | Proxy hops to trust for client-IP resolution behind the LB. Defaults to `1` (Cloud Run).    |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
 
 | Frontend env var        | Required | Notes                                                                                        |
