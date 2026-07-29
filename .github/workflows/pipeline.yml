@@ -27,14 +27,15 @@ name: CI/CD Pipeline
 #   push ANY non-main branch : gates (test, CodeQL, docker-build, audit,
 #                       frontend-smoke) → build image once → deploy to the
 #                       DEVELOPMENT environment. The Billion Godson regression is
-#                       OPT-IN — it runs only when the commit message contains
-#                       `[regression]`.
+#                       OPT-IN — run it manually via workflow_dispatch
+#                       (task: regression) against whatever is deployed in dev.
 #   push main (merge)        : gates → MANUAL APPROVAL (production Environment
 #                       protection) → PROMOTE the exact image the branch built +
 #                       validated in dev (build-once-promote) → post-deploy smoke
 #                       → AUTO-ROLLBACK on failure.
 #   pull_request → main      : gates only (PR checks).
-#   workflow_dispatch        : manual rollback path (rollback job only).
+#   workflow_dispatch        : manual — task: rollback (Cloud Run traffic) or
+#                       task: regression (Billion Godson vs current dev).
 #
 # NOTE: every non-main branch deploys to the ONE shared dev environment, so two
 # branches deploying at once overwrite each other (last push wins).
@@ -45,13 +46,18 @@ on:
     branches: ['**']
   workflow_dispatch:
     inputs:
+      task:
+        description: What to run
+        type: choice
+        options: [rollback, regression]
+        default: rollback
       service:
-        description: Service to roll back
+        description: (rollback) Service to roll back
         type: choice
         options: [backend, frontend, both]
         default: both
       revision:
-        description: Target revision name (blank = previous ready revision). Requires a single service.
+        description: (rollback) Target revision name (blank = previous ready revision). Requires a single service.
         required: false
         default: ''
 
@@ -644,29 +650,49 @@ jobs:
             echo "- **Commit:** \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── Regression: Billion Godson audit against the live DEV app (OPT-IN) ───
-  # Runs after the dev deploy ONLY when the pushed commit message contains
-  # `[regression]` — it's opt-in so it doesn't spend a real Anthropic audit on
-  # every branch push. Drives the deployed dev frontend in headless Chromium
-  # through a full Auto-Audit and asserts the verdict (frontend/test/
-  # regression.mjs). Informational: it does not block the dev deploy or the prod
-  # merge; read the verdict before you promote.
-  #
-  # Costs one real Anthropic audit (web search + thinking) per run.
+  # ── Regression: Billion Godson audit against the live DEV app (OPT-IN) ────
+  # Manual only — Actions → CI/CD Pipeline → Run workflow → task: regression. It
+  # drives whatever is CURRENTLY deployed in dev through a full Auto-Audit and
+  # asserts the verdict (frontend/test/regression.mjs). Opt-in via
+  # workflow_dispatch (not a commit flag — a commit message can't accidentally
+  # fire it) so it doesn't spend a real Anthropic audit on every push.
+  # Informational — nothing depends on it.
   #
   # Set the EXPECTED_VERDICT repo variable to the known-good Billion Godson
-  # verdict to enforce an exact match; until then the job runs in sanity mode
+  # verdict to enforce an exact match; until then it runs in sanity mode
   # (asserts a real verdict rendered) and prints the actual verdict to lock in.
   regression:
     name: Dev regression (Billion Godson)
-    needs: deploy-dev
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[regression]')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'regression'
+    environment: development
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # No deploy-dev output on a manual run — read the dev frontend URL live.
+      - name: Resolve the current dev frontend URL
+        id: dev
+        run: |
+          URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Dev frontend: $URL"
+
       - uses: actions/setup-node@v5
         with:
           node-version: 20
@@ -680,7 +706,7 @@ jobs:
       - name: Run Billion Godson regression against dev
         working-directory: frontend
         env:
-          FRONTEND_URL: ${{ needs.deploy-dev.outputs.frontend_url }}
+          FRONTEND_URL: ${{ steps.dev.outputs.url }}
           EXPECTED_VERDICT: ${{ vars.EXPECTED_VERDICT }}
         run: node test/regression.mjs
 
@@ -691,7 +717,7 @@ jobs:
   # deploy). Trigger from Actions → CI/CD Pipeline → Run workflow.
   rollback:
     name: Rollback Cloud Run
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'rollback'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
