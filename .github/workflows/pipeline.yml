@@ -20,7 +20,10 @@ name: CI/CD Pipeline
 # GitHub. Config comes from repo VARIABLES (Settings → Secrets and variables →
 # Actions → Variables): GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER,
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
-# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
+# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN, and — to enable Firebase
+# auth — FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID,
+# FIREBASE_APP_ID [+ optional FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_SENDER_ID].
+# Any FIREBASE_* var absent → auth stays off and the frontend is fully anonymous.
 
 # Branch → dev, main → prod:
 #
@@ -418,7 +421,7 @@ jobs:
             --max-instances 10 \
             --timeout 600 \
             --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}"
 
       # Read the backend's public URL back so the frontend deploy can inject
       # it as BACKEND_URL — this ordering is the hard constraint that prevents
@@ -449,7 +452,7 @@ jobs:
             --allow-unauthenticated \
             --memory 256Mi \
             --max-instances 5 \
-            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}${{ vars.FIREBASE_API_KEY && format(',FIREBASE_API_KEY={0}', vars.FIREBASE_API_KEY) || '' }}${{ vars.FIREBASE_AUTH_DOMAIN && format(',FIREBASE_AUTH_DOMAIN={0}', vars.FIREBASE_AUTH_DOMAIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FIREBASE_APP_ID && format(',FIREBASE_APP_ID={0}', vars.FIREBASE_APP_ID) || '' }}${{ vars.FIREBASE_STORAGE_BUCKET && format(',FIREBASE_STORAGE_BUCKET={0}', vars.FIREBASE_STORAGE_BUCKET) || '' }}${{ vars.FIREBASE_MESSAGING_SENDER_ID && format(',FIREBASE_MESSAGING_SENDER_ID={0}', vars.FIREBASE_MESSAGING_SENDER_ID) || '' }}"
           URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${{ vars.GCP_REGION }}" \
@@ -590,7 +593,7 @@ jobs:
             --max-instances 10 \
             --timeout 600 \
             --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}"
 
       - name: Capture backend URL
         id: backend
@@ -614,7 +617,7 @@ jobs:
             --allow-unauthenticated \
             --memory 256Mi \
             --max-instances 5 \
-            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}${{ vars.FIREBASE_API_KEY && format(',FIREBASE_API_KEY={0}', vars.FIREBASE_API_KEY) || '' }}${{ vars.FIREBASE_AUTH_DOMAIN && format(',FIREBASE_AUTH_DOMAIN={0}', vars.FIREBASE_AUTH_DOMAIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FIREBASE_APP_ID && format(',FIREBASE_APP_ID={0}', vars.FIREBASE_APP_ID) || '' }}${{ vars.FIREBASE_STORAGE_BUCKET && format(',FIREBASE_STORAGE_BUCKET={0}', vars.FIREBASE_STORAGE_BUCKET) || '' }}${{ vars.FIREBASE_MESSAGING_SENDER_ID && format(',FIREBASE_MESSAGING_SENDER_ID={0}', vars.FIREBASE_MESSAGING_SENDER_ID) || '' }}"
           URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${{ vars.GCP_REGION }}" \

@@ -15,7 +15,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
 - **Frontend:** vanilla HTML + CSS + JS in a **single file** (`frontend/public/index.html`) served by a thin Express runtime-config injector. **No bundler, no framework, no build step.**
   - External libs are loaded from CDNs only: Google Fonts (Bebas Neue, DM Sans, DM Mono), Font Awesome, jsPDF.
   - All app state lives in module-level JS variables in the inline `<script>`. Persistence is via `localStorage` (user ID + offline cache) and the backend (`/api/audits`).
-- **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`.
+- **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`, `express-rate-limit` (per-route rate limiting), `firebase-admin` (ID-token verification for auth).
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
 - **Storage:** Firestore Native, three collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), and `registrations` (append-only splash-registration leads).
 - **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** as a single gated pipeline at `.github/workflows/pipeline.yml` (PRs run tests + CodeQL + Docker build; merge to `main` re-runs them and then deploys, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflow is the reference path, not a hard dependency.
@@ -229,6 +229,22 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 > **Per-instance caveat.** This uses the default **in-memory** store, so counters are per Cloud Run instance — the real ceiling is up to `max-instances × limit`, not a precise global quota. It's a deliberate, stateless-friendly cost/abuse backstop (no Firestore/Redis round-trip per request), **not** a hard global cap. For an exact global limit, back the money routes with a shared store (Firestore/Redis); for volumetric/DDoS protection, add an edge limiter (Cloud Armor in front of an HTTPS LB, with ingress locked to `internal-and-cloud-load-balancing`). The two layers are complementary.
 
+### Authentication (Firebase — additive)
+
+Auth is **optional and additive**: the app keeps its anonymous per-browser flow (a `crypto.randomUUID()` in `localStorage`), and layers Firebase Authentication (Email/Password) on top for users who want cross-device sync.
+
+- **Client owns the credential flow.** The frontend loads the Firebase **compat** SDK from `gstatic` CDN and calls it directly for register / sign-in / **password reset** (`sendPasswordResetEmail` — enumeration-safe, expiring links, all hosted by Firebase) / email verification. **No passwords ever touch our backend**, and none of that flow lives in `buildAuditPrompt` territory — it's ordinary client code. The Firebase auth JS lives in the `AUTH (Firebase Authentication)` section of `index.html`; the modal is `#authModal` (reusing the `.modal-overlay`/`.modal` classes), triggered from the header `#authBtn`.
+- **Backend only verifies ID tokens.** `backend/lib/auth.js` verifies the `Authorization: Bearer <idToken>` with `firebase-admin` (`verifyIdToken`) and attaches `req.user = {uid, email, emailVerified}`. `optionalAuth` is mounted on all `/api/*` and **never rejects** — a missing/invalid token just means anonymous. `requireAuth` (available, not yet mounted) returns 401. No secret is needed: verification fetches Google's public keys; the Admin SDK uses the runtime SA's ADC.
+- **Data ownership.** The audits routes prefer `req.user.uid` over any client-supplied id, so a signed-in user's audits are keyed to their **verified** uid and the path/body id can't be used to read or delete someone else's. Anonymous callers still use their per-browser id. This preserves the existing ownership check and keeps all prior tests green.
+- **Config injection.** The public Firebase web config is injected into `window.__RF_CONFIG__.firebase` by `frontend/server.js` (same runtime-injection pattern as `BACKEND_URL`) — **only when `FIREBASE_API_KEY` is set**. If it's absent, the auth UI stays hidden and the app is fully anonymous.
+
+**One-time setup (operator, not automated)** — mirrors the WIF/Secret-Manager pattern:
+1. In the Firebase console, add Firebase to the GCP project (dev + prod), enable **Authentication → Email/Password**, and register a **Web app** to get the public config (apiKey, authDomain, appId).
+2. Set the frontend `FIREBASE_*` repo/Environment variables from that config, and (if it differs from `GOOGLE_CLOUD_PROJECT`) the backend `FIREBASE_PROJECT_ID`.
+3. Grant the **runtime** service account the token-verification path (Firebase Admin works with the existing `datastore.user`/project roles; no extra secret). Optionally customize the Firebase password-reset & verification email templates and authorized domains.
+
+Until step 1–2 are done, the code ships dormant — the auth button never appears and every request is anonymous, exactly as before.
+
 ### Anthropic call shape
 
 ```js
@@ -261,11 +277,17 @@ anthropic.messages.stream({
 | `RATE_LIMIT_API`        | no      | Blanket cap over the rest of `/api/*` per window per client IP. Defaults to `100`.           |
 | `RATE_LIMIT_WINDOW_MS`  | no      | Rate-limit window length in ms. Defaults to `60000` (1 min).                                 |
 | `TRUST_PROXY_HOPS`      | no      | Proxy hops to trust for client-IP resolution behind the LB. Defaults to `1` (Cloud Run).    |
+| `FIREBASE_PROJECT_ID`   | no      | Firebase project for auth ID-token verification. Falls back to `GOOGLE_CLOUD_PROJECT`. If neither resolves, auth is disabled and every request is anonymous. |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
 
 | Frontend env var        | Required | Notes                                                                                        |
 |-------------------------|---------|----------------------------------------------------------------------------------------------|
 | `BACKEND_URL`           | yes     | Backend Cloud Run URL. Injected into HTML at request time as `window.__RF_CONFIG__.backendUrl`. |
+| `FIREBASE_API_KEY`      | no      | Firebase Web API key. **Presence of this var enables the auth UI.** Public value (safe in HTML). |
+| `FIREBASE_AUTH_DOMAIN`  | no      | Firebase auth domain (e.g. `your-app.firebaseapp.com`). Required when auth is enabled.        |
+| `FIREBASE_PROJECT_ID`   | no      | Firebase project id (frontend copy of the public web config). Required when auth is enabled.  |
+| `FIREBASE_APP_ID`       | no      | Firebase web app id. Required when auth is enabled.                                          |
+| `FIREBASE_STORAGE_BUCKET` / `FIREBASE_MESSAGING_SENDER_ID` | no | Rest of the public web config; only needed if Storage/FCM are later used. |
 | `APP_VERSION`           | no      | Surfaced in `__RF_CONFIG__.version`.                                                         |
 | `NODE_ENV`              | no      | Surfaced in `__RF_CONFIG__.env`.                                                             |
 | `PORT`                  | no      | Cloud Run injects it.                                                                        |
@@ -337,6 +359,7 @@ Configuration lives in **GitHub repo variables** (Settings → Secrets and varia
 | `GCP_WIF_PROVIDER` | Full workload-identity-provider resource name. |
 | `GCP_DEPLOY_SA` | Deploy service-account email the workflow impersonates. |
 | *(optional)* `ANTHROPIC_MODEL`, `REGISTRATION_EMAIL`, `REGISTRATION_FROM`, `DONATION_URL`, `ALLOWED_ORIGIN`, `APP_VERSION` | Passed through as env vars only when set; unset → the app's built-in defaults apply. |
+| *(optional, enables auth)* `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` (+ `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`) | Public Firebase web config, forwarded to the frontend deploy (and `FIREBASE_PROJECT_ID` to the backend). Set per-Environment (development/production) for separate Firebase projects. Any absent → auth stays off, frontend fully anonymous. |
 
 One-time GCP setup (not automated — run once by an operator): enable the `run`, `cloudbuild`, `artifactregistry`, `iamcredentials`, and `secretmanager` APIs; create the two Secret Manager secrets; create the deploy SA with `run.admin` + `cloudbuild.builds.editor` + `artifactregistry.admin` + `storage.admin` + `iam.serviceAccountUser`; grant the **runtime** SA `datastore.user` + `secretmanager.secretAccessor`; and create the WIF pool/provider bound to this repo. The `audits` composite index still must be created manually — the workflow does not manage Firestore indexes.
 

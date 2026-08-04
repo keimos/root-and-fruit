@@ -9,6 +9,7 @@ const { Firestore } = require('@google-cloud/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
 const prompts = require('./lib/prompts');
 const { buildLimiters } = require('./lib/rateLimit');
+const auth = require('./lib/auth');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -189,6 +190,13 @@ app.use(cors({
 // route. See lib/rateLimit.js for the per-instance caveat.
 const limiters = buildLimiters();
 app.use('/api/', limiters.api);
+
+// ── Authentication (Firebase ID-token verification, additive) ──
+// Verifies a `Authorization: Bearer <idToken>` if present and attaches req.user;
+// requests without a valid token continue as anonymous (the per-browser flow is
+// preserved). Routes that own user data (audits) prefer req.user.uid over any
+// client-supplied id so a signed-in user cannot be spoofed. See lib/auth.js.
+app.use('/api/', auth.optionalAuth());
 
 // ── Health check ───────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
@@ -386,7 +394,10 @@ app.post('/api/register', limiters.register, async (req, res) => {
 
 // ── Save audit ─────────────────────────────────────────
 app.post('/api/audits', async (req, res) => {
-  const { userId, audit } = req.body;
+  const { audit } = req.body;
+  // A signed-in user's audits are keyed to their verified uid (unspoofable);
+  // anonymous callers supply their per-browser id in the body.
+  const userId = req.user?.uid || req.body.userId;
   if (!userId || !audit) return res.status(400).json({ error: 'userId and audit required' });
 
   try {
@@ -408,7 +419,9 @@ app.post('/api/audits', async (req, res) => {
 
 // ── Get audits for user ────────────────────────────────
 app.get('/api/audits/:userId', async (req, res) => {
-  const { userId } = req.params;
+  // Signed-in users always read their own audits (the verified uid wins over the
+  // path param, so the path can't be used to read someone else's).
+  const userId = req.user?.uid || req.params.userId;
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
 
   try {
@@ -433,7 +446,10 @@ app.get('/api/audits/:userId', async (req, res) => {
 
 // ── Delete audit ───────────────────────────────────────
 app.delete('/api/audits/:userId/:auditId', async (req, res) => {
-  const { userId, auditId } = req.params;
+  const { auditId } = req.params;
+  // Ownership is checked against the verified uid when signed in, else the path
+  // param (anonymous per-browser id). Either way the doc's userId must match.
+  const userId = req.user?.uid || req.params.userId;
   try {
     const ref = db.collection(COLLECTION).doc(auditId);
     const doc = await ref.get();
@@ -494,6 +510,9 @@ module.exports.isRetryable = isRetryable;
 module.exports.clampInt = clampInt;
 module.exports.promptSize = promptSize;
 module.exports.LIMITS = LIMITS;
+// Test-only: inject a fake Firebase ID-token verifier so the auth middleware can
+// be exercised without a live Firebase project. Never called in prod.
+module.exports.__setAuthVerifier = auth.__setVerifier;
 // Test-only: inject a mock Anthropic client so the /api/analyze handler path can
 // be integration-tested without a live key or network. Never called in prod.
 module.exports.__setAnthropic = (client) => { anthropic = client; };

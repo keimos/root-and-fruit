@@ -7,6 +7,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Firebase Authentication (compat build — exposes a global `firebase` usable
+     from the app's non-module inline script). Loads only the app + auth SDKs. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
 <style>
   :root {
     /* Eggshell / light theme. --black is the page background (kept named
@@ -546,6 +550,31 @@
   }
   .modal-header { padding: 28px 28px 0; text-align: center; }
   .modal-body { padding: 20px 28px 28px; }
+  /* ── Auth modal (Sign in / Register / Reset) ── */
+  .auth-title { font-family: 'Bebas Neue', sans-serif; font-size: 30px; letter-spacing: 0.06em; text-align: center; margin-bottom: 4px; }
+  .auth-sub { font-size: 13px; color: var(--text-dim); text-align: center; margin-bottom: 22px; }
+  .auth-panel { display: none; }
+  .auth-panel.active { display: block; }
+  .auth-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .auth-field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+  .auth-input { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; width: 100%; }
+  .auth-input:focus { outline: none; border-color: var(--gold); }
+  .auth-input.invalid { border-color: var(--red); }
+  .auth-row { display: flex; gap: 10px; }
+  .auth-row .auth-field { flex: 1; }
+  .auth-field-error { font-size: 11px; color: var(--red); min-height: 14px; }
+  .auth-submit { width: 100%; padding: 13px; border: none; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; background: var(--gold); color: #fff; transition: background 0.2s; }
+  .auth-submit:hover { background: #a37e1a; }
+  .auth-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .auth-alert { font-size: 13px; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; display: none; }
+  .auth-alert.show { display: block; }
+  .auth-alert.err { background: rgba(200,40,40,0.12); border: 1px solid rgba(200,40,40,0.4); color: #ffb0b0; }
+  .auth-alert.ok { background: rgba(40,160,90,0.12); border: 1px solid rgba(40,160,90,0.4); color: #9ce0b6; }
+  .auth-switch { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 16px; }
+  .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
+  .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
+  .auth-account { display: flex; align-items: center; gap: 8px; }
+  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .onboard-icon { font-size: 48px; display: block; margin-bottom: 16px; text-align: center; }
@@ -1020,6 +1049,82 @@
 </div>
 
 <!-- ══════════ ONBOARDING MODAL ══════════ -->
+<!-- ══════════ AUTH MODAL: Sign in / Register / Reset ══════════ -->
+<div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this)closeAuthModal()">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-body">
+      <div class="auth-alert err" id="authError"></div>
+      <div class="auth-alert ok" id="authNotice"></div>
+
+      <!-- Sign in -->
+      <div class="auth-panel" id="auth-signin">
+        <div class="auth-title">Welcome Back</div>
+        <div class="auth-sub">Sign in to sync your audits across devices</div>
+        <div class="auth-field">
+          <label for="siEmail">Email</label>
+          <input class="auth-input" id="siEmail" type="email" autocomplete="email" onblur="validateAuthField('siEmail','email')">
+          <div class="auth-field-error" id="siEmail-err"></div>
+        </div>
+        <div class="auth-field">
+          <label for="siPassword">Password</label>
+          <input class="auth-input" id="siPassword" type="password" autocomplete="current-password">
+          <div class="auth-field-error" id="siPassword-err"></div>
+        </div>
+        <button class="auth-submit" id="siSubmit" onclick="authLogin()">Sign In</button>
+        <div class="auth-switch" style="margin-top:12px;">
+          <button class="auth-link" onclick="switchAuthPanel('forgot')">Forgot password?</button>
+        </div>
+        <div class="auth-switch">New here? <button class="auth-link" onclick="switchAuthPanel('register')">Create an account</button></div>
+      </div>
+
+      <!-- Register -->
+      <div class="auth-panel" id="auth-register">
+        <div class="auth-title">Create Account</div>
+        <div class="auth-sub">Save and sync your Integrity Index audits</div>
+        <div class="auth-row">
+          <div class="auth-field">
+            <label for="rgFirst">First name</label>
+            <input class="auth-input" id="rgFirst" type="text" autocomplete="given-name" onblur="validateAuthField('rgFirst','name')">
+            <div class="auth-field-error" id="rgFirst-err"></div>
+          </div>
+          <div class="auth-field">
+            <label for="rgLast">Last name</label>
+            <input class="auth-input" id="rgLast" type="text" autocomplete="family-name" onblur="validateAuthField('rgLast','name')">
+            <div class="auth-field-error" id="rgLast-err"></div>
+          </div>
+        </div>
+        <div class="auth-field">
+          <label for="rgEmail">Email</label>
+          <input class="auth-input" id="rgEmail" type="email" autocomplete="email" onblur="validateAuthField('rgEmail','email')">
+          <div class="auth-field-error" id="rgEmail-err"></div>
+        </div>
+        <div class="auth-field">
+          <label for="rgPassword">Password</label>
+          <input class="auth-input" id="rgPassword" type="password" autocomplete="new-password" oninput="validateAuthField('rgPassword','password')">
+          <div class="auth-field-error" id="rgPassword-err"></div>
+        </div>
+        <div class="auth-hint">At least 12 characters. A memorable passphrase beats a short complex one.</div>
+        <button class="auth-submit" id="rgSubmit" onclick="authRegister()">Create Account</button>
+        <div class="auth-switch">Already have an account? <button class="auth-link" onclick="switchAuthPanel('signin')">Sign in</button></div>
+      </div>
+
+      <!-- Forgot password -->
+      <div class="auth-panel" id="auth-forgot">
+        <div class="auth-title">Reset Password</div>
+        <div class="auth-sub">We'll email you a secure reset link</div>
+        <div class="auth-field">
+          <label for="fpEmail">Email</label>
+          <input class="auth-input" id="fpEmail" type="email" autocomplete="email" onblur="validateAuthField('fpEmail','email')">
+          <div class="auth-field-error" id="fpEmail-err"></div>
+        </div>
+        <button class="auth-submit" id="fpSubmit" onclick="authForgot()">Send Reset Link</button>
+        <div class="auth-switch">Remembered it? <button class="auth-link" onclick="switchAuthPanel('signin')">Back to sign in</button></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="onboardModal">
   <div class="modal">
     <div class="modal-body">
@@ -1123,6 +1228,13 @@
         <button class="btn-ghost" onclick="showOnboarding()"><i class="fa-solid fa-circle-question"></i> <span class="hide-xs">How it Works</span></button>
         <button class="btn-ghost" onclick="showView('saved')"><i class="fa-solid fa-folder-open"></i> <span class="hide-xs">Saved</span></button>
         <button class="btn-ghost" onclick="resetAll()">Reset</button>
+        <!-- Auth: signed-out shows "Sign In"; signed-in shows email + Sign Out.
+             Both hidden until Firebase auth initializes (config present). -->
+        <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
+        <span class="auth-account" id="authAccount" style="display:none;">
+          <span class="auth-account-email" id="authAccountEmail"></span>
+          <button class="btn-ghost" onclick="authLogout()">Sign Out</button>
+        </span>
       </div>
       <div id="liveScore">0</div>
     </div>
@@ -2638,6 +2750,10 @@ function renderAuditSection(title, color, items, labels, type) {
 //  CLOUD AUDIT STORE
 // ══════════════════════════════════════════════
 const CloudAuditStore = {
+  // Returns the per-browser anonymous id. When signed in, the backend keys
+  // audits to the verified Firebase uid instead (it ignores this value), so this
+  // remains the fallback identity for anonymous use.
+  // in: none  out: string — stable per-browser UUID from localStorage
   getUserId() {
     let id = localStorage.getItem('rfUserId');
     if (!id) { id = crypto.randomUUID(); localStorage.setItem('rfUserId', id); }
@@ -2648,10 +2764,18 @@ const CloudAuditStore = {
     return (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
   },
 
+  // Build request headers, attaching a Firebase ID token when the user is signed
+  // in so the backend can scope the request to their account.
+  // in: base (object) — base headers to merge  out: Promise<object> — headers
+  async authHeaders(base = {}) {
+    const token = await getIdToken();
+    return token ? { ...base, Authorization: `Bearer ${token}` } : { ...base };
+  },
+
   async save(audit) {
     const res = await fetch(`${this.getBackendUrl()}/api/audits`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await this.authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ userId: this.getUserId(), audit })
     });
     if (!res.ok) throw new Error('Cloud save failed: ' + res.status);
@@ -2659,7 +2783,9 @@ const CloudAuditStore = {
   },
 
   async loadAll() {
-    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}`);
+    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}`, {
+      headers: await this.authHeaders()
+    });
     if (!res.ok) throw new Error('Cloud load failed: ' + res.status);
     const data = await res.json();
     return data.audits || [];
@@ -2667,7 +2793,8 @@ const CloudAuditStore = {
 
   async delete(auditId) {
     const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}/${auditId}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: await this.authHeaders()
     });
     if (!res.ok) throw new Error('Cloud delete failed: ' + res.status);
   },
@@ -2675,7 +2802,7 @@ const CloudAuditStore = {
   async createShareLink(audit) {
     const res = await fetch(`${this.getBackendUrl()}/api/share`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await this.authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ audit })
     });
     if (!res.ok) throw new Error('Share failed: ' + res.status);
@@ -2683,6 +2810,251 @@ const CloudAuditStore = {
     return `${window.location.origin}/shared/${data.token}`;
   }
 };
+
+// ══════════════════════════════════════════════
+//  AUTH (Firebase Authentication)
+// ══════════════════════════════════════════════
+// The client SDK handles registration, sign-in, password reset, and email
+// verification directly against Firebase; the backend only verifies the ID
+// token. Auth is additive — if no Firebase config is injected, the UI stays
+// hidden and the app runs fully anonymously (per-browser id).
+
+const AUTH_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUTH_MIN_PASSWORD = 12;
+let firebaseAuth = null;          // firebase.auth() instance, or null when disabled
+let currentAuthUser = null;       // the signed-in firebase.User, or null
+
+/**
+ * Initialize Firebase Auth from injected runtime config, if present.
+ * Wires an auth-state listener and reveals the header auth control.
+ * in: none  out: void (side effects: firebase init, DOM reveal)
+ */
+function initFirebaseAuth() {
+  const cfg = window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase;
+  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') return; // auth disabled
+  try {
+    firebase.initializeApp(cfg);
+    firebaseAuth = firebase.auth();
+    firebaseAuth.onAuthStateChanged((user) => {
+      currentAuthUser = user;
+      updateAuthUI();
+    });
+    const btn = document.getElementById('authBtn');
+    if (btn) btn.style.display = '';
+  } catch (err) {
+    console.error('Firebase auth init failed:', err);
+  }
+}
+
+/**
+ * Get a fresh Firebase ID token for the signed-in user.
+ * in: none  out: Promise<string|null> — the ID token, or null if signed out
+ */
+async function getIdToken() {
+  if (!currentAuthUser) return null;
+  try { return await currentAuthUser.getIdToken(); } catch { return null; }
+}
+
+/**
+ * Reflect the current auth state in the header (Sign In vs email + Sign Out).
+ * in: none  out: void (DOM mutation)
+ */
+function updateAuthUI() {
+  const btn = document.getElementById('authBtn');
+  const acct = document.getElementById('authAccount');
+  const email = document.getElementById('authAccountEmail');
+  if (!btn || !acct) return;
+  if (currentAuthUser) {
+    btn.style.display = 'none';
+    acct.style.display = '';
+    if (email) email.textContent = currentAuthUser.email || 'Account';
+  } else {
+    btn.style.display = '';
+    acct.style.display = 'none';
+  }
+}
+
+/**
+ * Open the auth modal on a given panel.
+ * in: panel (string) — 'signin' | 'register' | 'forgot'  out: void (DOM)
+ */
+function openAuthModal(panel = 'signin') {
+  clearAuthAlerts();
+  switchAuthPanel(panel);
+  document.getElementById('authModal').classList.remove('hidden');
+}
+
+/** Close the auth modal and clear any alerts. in: none  out: void (DOM) */
+function closeAuthModal() {
+  document.getElementById('authModal').classList.add('hidden');
+  clearAuthAlerts();
+}
+
+/**
+ * Show one auth panel and hide the others.
+ * in: panel (string) — 'signin' | 'register' | 'forgot'  out: void (DOM)
+ */
+function switchAuthPanel(panel) {
+  clearAuthAlerts();
+  ['signin', 'register', 'forgot'].forEach((p) => {
+    const el = document.getElementById('auth-' + p);
+    if (el) el.classList.toggle('active', p === panel);
+  });
+}
+
+/** Clear both auth alert banners. in: none  out: void (DOM) */
+function clearAuthAlerts() {
+  ['authError', 'authNotice'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) { el.classList.remove('show'); el.textContent = ''; }
+  });
+}
+
+/**
+ * Show an auth alert banner.
+ * in: kind ('err'|'ok'), msg (string)  out: void (DOM)
+ */
+function showAuthAlert(kind, msg) {
+  clearAuthAlerts();
+  const el = document.getElementById(kind === 'ok' ? 'authNotice' : 'authError');
+  if (el) { el.textContent = msg; el.classList.add('show'); }
+}
+
+/**
+ * Validate one auth field and render its inline error.
+ * in: id (string) input element id, type ('email'|'name'|'password')
+ * out: boolean — true if valid (also toggles .invalid + writes #<id>-err)
+ */
+function validateAuthField(id, type) {
+  const input = document.getElementById(id);
+  const errEl = document.getElementById(id + '-err');
+  const val = (input.value || '').trim();
+  let msg = '';
+  if (type === 'email') {
+    if (!val) msg = 'Email is required.';
+    else if (!AUTH_EMAIL_RE.test(val) || val.length > 254) msg = 'Enter a valid email address.';
+  } else if (type === 'name') {
+    if (!val) msg = 'Required.';
+    else if (val.length > 100) msg = 'Too long.';
+  } else if (type === 'password') {
+    if (val.length < AUTH_MIN_PASSWORD) msg = `Use at least ${AUTH_MIN_PASSWORD} characters.`;
+  }
+  if (input) input.classList.toggle('invalid', !!msg);
+  if (errEl) errEl.textContent = msg;
+  return !msg;
+}
+
+/**
+ * Map a Firebase auth error to a friendly, enumeration-safe message.
+ * in: err (Error with optional .code)  out: string
+ */
+function authErrorMessage(err) {
+  switch (err && err.code) {
+    case 'auth/email-already-in-use': return 'An account with this email already exists.';
+    case 'auth/invalid-email':        return "That email doesn't look right.";
+    case 'auth/weak-password':        return 'That password is too weak.';
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+    case 'auth/invalid-credential':   return 'Incorrect email or password.';
+    case 'auth/too-many-requests':    return 'Too many attempts. Please wait a bit and try again.';
+    case 'auth/network-request-failed': return 'Network error — check your connection.';
+    default: return (err && err.message) || 'Something went wrong. Please try again.';
+  }
+}
+
+/** Enable/disable a submit button while a request is in flight. in: id, busy(bool)  out: void */
+function setAuthBusy(id, busy) {
+  const btn = document.getElementById(id);
+  if (btn) btn.disabled = busy;
+}
+
+/**
+ * Register a new account (email/password), set the display name, and send a
+ * verification email. Validates all fields client-side first.
+ * in: none (reads form)  out: Promise<void> (Firebase calls, DOM)
+ */
+async function authRegister() {
+  if (!firebaseAuth) return;
+  const okFirst = validateAuthField('rgFirst', 'name');
+  const okLast = validateAuthField('rgLast', 'name');
+  const okEmail = validateAuthField('rgEmail', 'email');
+  const okPass = validateAuthField('rgPassword', 'password');
+  if (!(okFirst && okLast && okEmail && okPass)) return;
+
+  const first = document.getElementById('rgFirst').value.trim();
+  const last = document.getElementById('rgLast').value.trim();
+  const email = document.getElementById('rgEmail').value.trim();
+  const password = document.getElementById('rgPassword').value;
+
+  setAuthBusy('rgSubmit', true);
+  try {
+    const cred = await firebaseAuth.createUserWithEmailAndPassword(email, password);
+    await cred.user.updateProfile({ displayName: `${first} ${last}`.trim() });
+    try { await cred.user.sendEmailVerification(); } catch { /* non-fatal */ }
+    showAuthAlert('ok', 'Account created! Check your email to verify your address.');
+    setTimeout(closeAuthModal, 1800);
+  } catch (err) {
+    showAuthAlert('err', authErrorMessage(err));
+  } finally {
+    setAuthBusy('rgSubmit', false);
+  }
+}
+
+/**
+ * Sign in with email + password.
+ * in: none (reads form)  out: Promise<void> (Firebase call, DOM)
+ */
+async function authLogin() {
+  if (!firebaseAuth) return;
+  const okEmail = validateAuthField('siEmail', 'email');
+  const password = document.getElementById('siPassword').value;
+  if (!okEmail || !password) {
+    if (!password) document.getElementById('siPassword-err').textContent = 'Password is required.';
+    return;
+  }
+  const email = document.getElementById('siEmail').value.trim();
+  setAuthBusy('siSubmit', true);
+  try {
+    await firebaseAuth.signInWithEmailAndPassword(email, password);
+    closeAuthModal();
+  } catch (err) {
+    showAuthAlert('err', authErrorMessage(err));
+  } finally {
+    setAuthBusy('siSubmit', false);
+  }
+}
+
+/**
+ * Send a password-reset email. Always shows the same generic confirmation
+ * (even for an unknown address) so the form can't be used to enumerate accounts.
+ * in: none (reads form)  out: Promise<void> (Firebase call, DOM)
+ */
+async function authForgot() {
+  if (!firebaseAuth) return;
+  if (!validateAuthField('fpEmail', 'email')) return;
+  const email = document.getElementById('fpEmail').value.trim();
+  const generic = "If an account exists for that email, we've sent a reset link.";
+  setAuthBusy('fpSubmit', true);
+  try {
+    await firebaseAuth.sendPasswordResetEmail(email);
+    showAuthAlert('ok', generic);
+  } catch (err) {
+    // Don't leak existence: treat "no such user" as success.
+    if (err && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email')) {
+      showAuthAlert('ok', generic);
+    } else {
+      showAuthAlert('err', authErrorMessage(err));
+    }
+  } finally {
+    setAuthBusy('fpSubmit', false);
+  }
+}
+
+/** Sign the current user out. in: none  out: Promise<void> (Firebase call, DOM) */
+async function authLogout() {
+  if (!firebaseAuth) return;
+  try { await firebaseAuth.signOut(); } catch (err) { console.error('Sign out failed:', err); }
+}
 
 // ══════════════════════════════════════════════
 //  SAVE / LOAD AUDITS
@@ -4024,6 +4396,7 @@ function showView(v) {
 // ══════════════════════════════════════════════
 //  UPDATED INIT — splash gates first-run onboarding + registration
 // ══════════════════════════════════════════════
+initFirebaseAuth();    // wire Firebase auth (no-op if no config injected)
 renderSavedList();
 loadFromURL();
 calculate();
