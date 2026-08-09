@@ -3384,8 +3384,11 @@ function loadAudit(id) {
     lastAnalysisData = audit.analysisData;
     renderAuditReport(audit.analysisData);
   }
-  // Restore auxiliary lookups (candidates only) so the Full Report + PDF reproduce them
-  lastElectabilityData = audit.electabilityData || null;
+  // Restore auxiliary lookups (candidates only) so the Full Report + PDF reproduce them.
+  // Electability goes through its renderer rather than just setting the cache:
+  // assigning the variable alone left the Results card hidden while the Full
+  // Report and the PDF both showed the data — three surfaces, three answers.
+  renderElectabilityResult(audit.electabilityData || null);
   lastScrubberData = audit.scrubberData || null;
   if (lastScrubberData) {
     renderScrubberResults(lastScrubberData);
@@ -3757,6 +3760,32 @@ function exportPDF() {
   }
   const GREEN = [42,157,92], RED = [192,57,43], GOLD = [139,105,20];
   const d = lastAnalysisData;
+
+  // Community Assessment notes. These are captured by getJustifications(),
+  // persisted on the audit object, and shown in the Community tab — but were
+  // never exported, so a PDF of a community-adjusted audit showed the adjusted
+  // number with no record of the reasoning behind it.
+  const justs = getJustifications();
+  const justLabels = {
+    root: 'The Root (Values)',
+    branch: 'The Branches (Advocacy)',
+    fruit: 'The Fruit (Outcomes)',
+    vis: 'The Light (Visibility)',
+    toxic: 'Toxic Soil (Penalties)',
+    peoples: "People's Choice"
+  };
+  const justEntries = Object.keys(justLabels).filter(k => justs[k]);
+  if (justEntries.length) {
+    sectionHeading('COMMUNITY ASSESSMENT NOTES');
+    justEntries.forEach(k => {
+      ensure(10);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(139,105,20);
+      doc.text(justLabels[k], margin, y); y += 5;
+      paragraph(justs[k], 9, [70,70,70], 6);
+      y += 3;
+    });
+    y += 2;
+  }
 
   if (d?.summary) {
     sectionHeading('EXECUTIVE SUMMARY');
@@ -4629,12 +4658,59 @@ async function runElectabilityScore() {
  * @param {object} data  parsed electability JSON {score, tier, context, polls[], trend}
  * @returns {void}  mutates the Results-tab DOM, the Full Report DOM, and lastElectabilityData
  */
+/**
+ * Normalize cached Electability data into the values every surface renders.
+ * Single source of truth for the score clamp, the color ramp, and the trend
+ * suffix, so the Results card, the Full Report copy, and the PDF cannot drift.
+ * @param {object} data  the Electability payload (score, tier, trend, …)
+ * @returns {{score: number, color: string, trend: string}}  clamped score,
+ *          CSS color variable, and the human trend suffix ('' when unknown)
+ */
+function electabilityView(data) {
+  const score = Math.min(10, Math.max(0, data?.score || 0));
+  return {
+    score,
+    color: score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)',
+    trend: data?.trend === 'rising' ? ' (rising)' : data?.trend === 'falling' ? ' (falling)'
+      : data?.trend === 'stable' ? ' (stable)' : ''
+  };
+}
+
+/**
+ * Build the poll rows shared by the Results card and the Full Report copy.
+ * Previously duplicated in both renderers, which is exactly how they drift.
+ * @param {Array} polls  poll entries ({source, result, date})
+ * @param {string} color CSS color for the bars and percentages
+ * @returns {string}     HTML for the poll list ('' when there are no polls)
+ */
+function electabilityPollsHtml(polls, color) {
+  return (polls || []).map(p => {
+    const pct = parseFloat(p.result) || 0;
+    return `<div class="poll-item">
+      <span class="poll-name">${escapeHtml(p.source)}</span>
+      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100, pct * 2)}%;background:${color};"></div></div>
+      <span class="poll-pct" style="color:${color};">${escapeHtml(p.result)}</span>
+      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
+    </div>`;
+  }).join('');
+}
+
 function renderElectabilityResult(data) {
-  lastElectabilityData = data;   // cache so the Full Report tab + PDF can reproduce it
+  lastElectabilityData = data || null;   // cache so the Full Report tab + PDF can reproduce it
   renderReportElectability();
-  const score = Math.min(10, Math.max(0, data.score || 0));
-  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
-  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
+
+  // Nothing cached (e.g. a policy audit, or a saved audit with no lookup) —
+  // hide the card rather than leaving a stale one from the previous subject.
+  const card = document.getElementById('electabilityCard');
+  if (!lastElectabilityData) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+  // Shown here as well as in runElectabilityScore(), so restoring a saved audit
+  // brings the Results card back and all three surfaces agree.
+  if (card) card.style.display = 'block';
+
+  const { score, color: electColor, trend: trendIcon } = electabilityView(data);
 
   document.getElementById('electScoreNum').textContent = score;
   document.getElementById('electScoreNum').style.color = electColor;
@@ -4647,17 +4723,7 @@ function renderElectabilityResult(data) {
   ctxEl.textContent = data.context || '';
   ctxEl.style.display = data.context ? 'block' : 'none';
 
-  let pollHtml = '';
-  (data.polls || []).forEach(p => {
-    const pct = parseFloat(p.result) || 0;
-    pollHtml += `<div class="poll-item">
-      <span class="poll-name">${escapeHtml(p.source)}</span>
-      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
-      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
-      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
-    </div>`;
-  });
-  document.getElementById('electPollItems').innerHTML = pollHtml;
+  document.getElementById('electPollItems').innerHTML = electabilityPollsHtml(data.polls, electColor);
 
   document.getElementById('electabilityLoading').style.display = 'none';
   document.getElementById('electabilityResult').style.display = 'flex';
@@ -4675,20 +4741,8 @@ function renderReportElectability() {
   const data = lastElectabilityData;
   if (!data) { section.style.display = 'none'; content.innerHTML = ''; return; }
 
-  const score = Math.min(10, Math.max(0, data.score || 0));
-  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
-  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
-
-  let pollHtml = '';
-  (data.polls || []).forEach(p => {
-    const pct = parseFloat(p.result) || 0;
-    pollHtml += `<div class="poll-item">
-      <span class="poll-name">${escapeHtml(p.source)}</span>
-      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
-      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
-      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
-    </div>`;
-  });
+  const { score, color: electColor, trend: trendIcon } = electabilityView(data);
+  const pollHtml = electabilityPollsHtml(data.polls, electColor);
 
   content.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px;">

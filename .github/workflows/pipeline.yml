@@ -263,6 +263,12 @@ jobs:
       - name: Run splash sequence test
         working-directory: frontend
         run: node test/splash.mjs
+      # Guards report/PDF consistency: a saved audit must render the same
+      # Electability data on the Results tab, the Full Report, and in the PDF,
+      # and the PDF must carry the Community Assessment justifications.
+      - name: Run report consistency test
+        working-directory: frontend
+        run: node test/report.mjs
 
   # ── Build once: push SHA-tagged images to the shared registry ───────────
   # Runs on a push to any non-main branch (after the gates). Builds both images
