@@ -862,6 +862,31 @@
 
   <div class="splash-body" id="splashBody">
 
+    <!-- ── ACCOUNT CARD: shown first, ahead of "Before You Begin" ──
+         Buttons open the existing #authModal rather than duplicating the form,
+         so there is exactly one sign-in/register implementation to maintain.
+         Skippable by design: manual scoring, saved audits, and sharing stay
+         open to anonymous users — only AI audits require an account. -->
+    <div id="splashAuthWrap" style="display:none;align-items:center;justify-content:center;min-height:100%;padding:24px 0;">
+      <div class="modal" style="max-width:480px;width:100%;">
+        <div class="modal-body" style="text-align:center;">
+          <span class="onboard-icon">🌳</span>
+          <div class="onboard-title">Create Your Account</div>
+          <div class="onboard-body">
+            An account saves your audits across devices and unlocks
+            <strong style="color:var(--text);">5 free AI audits</strong>.
+            You can also look around first — manual scoring, saved audits, and
+            sharing never require one.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;margin:20px 0 14px;">
+            <button class="btn-onboard-next" onclick="splashOpenAuth('register')" style="width:100%;">Create Account →</button>
+            <button class="btn-onboard-skip" onclick="splashOpenAuth('signin')" style="width:100%;">I already have an account</button>
+          </div>
+          <button class="auth-link" onclick="splashSkipAuth()" style="font-size:12px;">Continue without an account</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── ONBOARDING CARD: 4 steps centered in overlay ── -->
     <div id="splashOnboardWrap" style="display:flex;align-items:center;justify-content:center;min-height:100%;padding:24px 0;">
       <div class="modal" style="max-width:560px;width:100%;">
@@ -966,7 +991,7 @@
             </div>
             <div class="onboard-nav">
               <button class="btn-onboard-skip" onclick="splashPrev()">← Back</button>
-              <button class="btn-onboard-next" id="btnStep1Next" onclick="goToRegistration()" disabled>Continue to Registration →</button>
+              <button class="btn-onboard-next" id="btnStep1Next" onclick="splashFinish()" disabled>Continue →</button>
             </div>
           </div>
 
@@ -2873,6 +2898,9 @@ function initFirebaseAuth() {
       // Loading the account also creates it on first sign-in, which is where the
       // one-time free credit grant is issued.
       refreshAccount();
+      // Advances the splash past the account card once a session resolves —
+      // covers both a fresh sign-in and a restored one on page load.
+      splashOnAuthChange();
     });
     const btn = document.getElementById('authBtn');
     if (btn) btn.style.display = '';
@@ -2921,7 +2949,9 @@ function openAuthModal(panel = 'signin') {
 
 /** Close the auth modal and clear any alerts. in: none  out: void (DOM) */
 function closeAuthModal() {
-  document.getElementById('authModal').classList.add('hidden');
+  const modal = document.getElementById('authModal');
+  modal.classList.add('hidden');
+  modal.style.zIndex = '';   // drop any lift applied when opened over the splash
   clearAuthAlerts();
 }
 
@@ -3026,6 +3056,11 @@ async function authRegister() {
     const cred = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     await cred.user.updateProfile({ displayName: `${first} ${last}`.trim() });
     try { await cred.user.sendEmailVerification(); } catch { /* non-fatal */ }
+    // Account creation IS the registration: this is what fires the Firestore
+    // lead capture and the Resend welcome email, so signed-up users are never
+    // asked to fill the separate splash lead form. Best-effort — a delivery or
+    // network failure must not undo an account that already exists.
+    try { await submitAccountRegistration(first, last, email); } catch (err) { console.error('Lead capture failed:', err); }
     showAuthAlert('ok', 'Account created! Check your email to verify your address.');
     setTimeout(closeAuthModal, 1800);
   } catch (err) {
@@ -3033,6 +3068,24 @@ async function authRegister() {
   } finally {
     setAuthBusy('rgSubmit', false);
   }
+}
+
+/**
+ * Send a new account's details to /api/register (Firestore lead capture +
+ * Resend welcome email). Replaces the separate splash lead form for anyone who
+ * registers through the auth modal.
+ * in:  first (string), last (string), email (string) — from the register form
+ * out: Promise<void> (network call; throws on a non-OK response so the caller
+ *      can log it — never fatal to account creation)
+ */
+async function submitAccountRegistration(first, last, email) {
+  const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+  const res = await fetch(backendUrl + '/api/register', {
+    method: 'POST',
+    headers: await apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name: `${first} ${last}`.trim(), email })
+  });
+  if (!res.ok) throw new Error('Registration capture failed: ' + res.status);
 }
 
 /**
@@ -3910,11 +3963,78 @@ toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getEleme
 //  via Resend and persists the lead to Firestore. The notification address,
 //  sender, and auto-reply copy all live server-side in backend/server.js.
 
+/**
+ * Decide what the splash shows on load. The account card comes first, ahead of
+ * the "Before You Begin" onboarding; it is skipped when auth is unavailable or
+ * the visitor is already signed in (onAuthStateChanged calls back in for the
+ * restored-session case, which resolves after this runs).
+ * in: none  out: void (DOM mutation)
+ */
 function initSplash() {
   const registered = sessionStorage.getItem('rfRegistered');
   if (registered) {
     document.getElementById('splashOverlay').classList.add('hidden');
+    return;
   }
+  const authAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase && window.__RF_CONFIG__.firebase.apiKey);
+  if (authAvailable && !currentAuthUser) {
+    document.getElementById('splashAuthWrap').style.display = 'flex';
+    document.getElementById('splashOnboardWrap').style.display = 'none';
+    document.getElementById('splashStepLabel').textContent = 'Account';
+  }
+}
+
+/**
+ * Open the shared auth modal from the splash. The splash overlay sits above the
+ * modal's normal stacking order, so the modal is lifted for the duration.
+ * in: panel (string) — 'signin' | 'register'  out: void (DOM mutation)
+ */
+function splashOpenAuth(panel) {
+  const modal = document.getElementById('authModal');
+  if (modal) modal.style.zIndex = '2100';
+  openAuthModal(panel);
+}
+
+/**
+ * Leave the account card and start the "Before You Begin" flow.
+ * in: none  out: void (DOM mutation)
+ */
+function splashSkipAuth() {
+  document.getElementById('splashAuthWrap').style.display = 'none';
+  document.getElementById('splashOnboardWrap').style.display = 'flex';
+  document.getElementById('splashStepLabel').textContent =
+    `Step ${splashStep + 1} of ${SPLASH_STEPS.length} — Before You Begin`;
+  const body = document.querySelector('.splash-body');
+  if (body) body.scrollTop = 0;
+}
+
+/**
+ * Called when auth state resolves. If the splash is still on the account card,
+ * a signed-in user is moved straight into the onboarding flow.
+ * in: none  out: void (DOM mutation)
+ */
+function splashOnAuthChange() {
+  const wrap = document.getElementById('splashAuthWrap');
+  if (!wrap) return;
+  // Advance the splash *behind* the modal rather than closing it here —
+  // authRegister() shows a "verify your email" notice on a timer and
+  // authLogin() closes on its own; force-closing would cut the notice short.
+  if (currentAuthUser && wrap.style.display !== 'none') splashSkipAuth();
+}
+
+/**
+ * Finish the onboarding flow. Signed-in users skip the separate lead-capture
+ * form entirely — authRegister() already sent their details to /api/register —
+ * so only anonymous visitors are asked to fill it in.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function splashFinish() {
+  if (currentAuthUser) {
+    sessionStorage.setItem('rfRegistered', 'true');
+    document.getElementById('splashOverlay').classList.add('hidden');
+    return;
+  }
+  goToRegistration();
 }
 
 function toggleAgree() {

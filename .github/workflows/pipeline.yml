@@ -229,6 +229,7 @@ jobs:
   # silently. This boots frontend/server.js and drives every nav tab in headless
   # Chromium — catching uncaught errors, missing runtime-config injection, and
   # nav/tabs-array drift (the dead-showView hazard). See frontend/test/smoke.mjs.
+  # Also runs frontend/test/splash.mjs, which covers the first-run splash order.
   frontend-smoke:
     name: Frontend smoke test
     runs-on: ubuntu-latest
@@ -256,6 +257,12 @@ jobs:
       - name: Run smoke test
         working-directory: frontend
         run: node test/smoke.mjs
+      # Asserts the first-run ordering: account card → "Before You Begin" →
+      # onboarding, skippable, and no lead form for signed-in users. Needs no
+      # Firebase project — a dummy key is enough to enable the UI.
+      - name: Run splash sequence test
+        working-directory: frontend
+        run: node test/splash.mjs
 
   # ── Build once: push SHA-tagged images to the shared registry ───────────
   # Runs on a push to any non-main branch (after the gates). Builds both images
