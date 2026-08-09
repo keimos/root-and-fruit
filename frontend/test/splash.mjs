@@ -192,6 +192,33 @@ try {
     'and the splash does not re-show on the next load'
   );
 
+  // ── Sign-out returns to login/registration ───────────
+  // Walk the onboarding partway first, so the reset has state to clear.
+  await page.evaluate(() => { splashNext(); toggleAgree(); });
+  await page.evaluate(async () => { await authLogout(); });
+  ok(
+    !(await page.evaluate(() => document.getElementById('splashOverlay').classList.contains('hidden'))),
+    'signing out re-opens the splash'
+  );
+  ok(await visible(page, '#splashAuthWrap'), 'and lands on the account card');
+  ok(!(await visible(page, '#splashOnboardWrap')), 'with the onboarding put away');
+  ok(
+    (await page.textContent('#splashStepLabel')).trim() === 'Account',
+    'step label back to "Account"'
+  );
+  ok(
+    await page.evaluate(() => sessionStorage.getItem('rfRegistered') === null),
+    'the registered flag is cleared so the splash returns on reload'
+  );
+  ok(
+    await page.evaluate(() =>
+      splashStep === 0
+      && document.getElementById('splashStep1').classList.contains('active')
+      && !document.getElementById('agreeCB').checked
+      && document.getElementById('btnStep1Next').disabled),
+    'onboarding is rewound to step 1 with the agreement gate re-armed'
+  );
+
   await page.close();
   server.kill('SIGTERM');
   await sleep(500);

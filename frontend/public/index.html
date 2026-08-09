@@ -3138,10 +3138,22 @@ async function authForgot() {
   }
 }
 
-/** Sign the current user out. in: none  out: Promise<void> (Firebase call, DOM) */
+/**
+ * Sign the current user out and return them to the login/registration screen.
+ * The splash is only re-opened when the sign-out actually succeeded — bouncing
+ * a still-signed-in user to a login screen would be worse than doing nothing.
+ * in: none  out: Promise<void> (Firebase call, DOM mutation)
+ */
 async function authLogout() {
   if (!firebaseAuth) return;
-  try { await firebaseAuth.signOut(); } catch (err) { console.error('Sign out failed:', err); }
+  try {
+    await firebaseAuth.signOut();
+  } catch (err) {
+    console.error('Sign out failed:', err);
+    showToast('Could not sign out — please try again');
+    return;
+  }
+  resetSplashToAccount();
 }
 
 // ══════════════════════════════════════════════
@@ -4035,6 +4047,44 @@ function splashFinish() {
     return;
   }
   goToRegistration();
+}
+
+/**
+ * Return the splash to its first-run state, showing the account card, and
+ * re-open it. Used on sign-out so the customer lands back on the
+ * login/registration screen rather than an anonymous-looking tool.
+ * Resets the onboarding step, the agreement checkbox, and the lead form so a
+ * later visitor does not resume mid-flow from the previous session.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function resetSplashToAccount() {
+  // Cleared so initSplash() re-shows the splash on the next load too, instead
+  // of treating this browser as already-registered.
+  sessionStorage.removeItem('rfRegistered');
+
+  // Rewind the onboarding carousel to step 1.
+  SPLASH_STEPS.forEach((id) => document.getElementById(id)?.classList.remove('active'));
+  splashStep = 0;
+  document.getElementById(SPLASH_STEPS[0])?.classList.add('active');
+
+  // Re-arm the agreement gate.
+  const cb = document.getElementById('agreeCB');
+  const row = document.getElementById('agreeRow');
+  const nextBtn = document.getElementById('btnStep1Next');
+  if (cb) cb.checked = false;
+  if (row) row.classList.remove('checked');
+  if (nextBtn) nextBtn.disabled = true;
+
+  // Account card front and centre; lead form and onboarding put away.
+  const step2 = document.getElementById('splashStep2');
+  if (step2) step2.style.display = 'none';
+  document.getElementById('splashOnboardWrap').style.display = 'none';
+  document.getElementById('splashAuthWrap').style.display = 'flex';
+  document.getElementById('splashStepLabel').textContent = 'Account';
+
+  document.getElementById('splashOverlay').classList.remove('hidden');
+  const body = document.querySelector('.splash-body');
+  if (body) body.scrollTop = 0;
 }
 
 function toggleAgree() {
