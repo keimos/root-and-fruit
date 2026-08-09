@@ -10,6 +10,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const prompts = require('./lib/prompts');
 const { buildLimiters } = require('./lib/rateLimit');
 const auth = require('./lib/auth');
+const creditsLib = require('./lib/credits');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -170,6 +171,11 @@ rootandfruit.app`;
 const db = new Firestore({ projectId: PROJECT_ID });
 const COLLECTION = 'audits';
 
+// ── Credits ────────────────────────────────────────────
+// Balances live in Firestore and are debited server-side before every billed
+// Anthropic call. `let` (not const) so tests can inject a fake via __setCredits.
+let credits = creditsLib.createCredits(db);
+
 // ── Middleware ─────────────────────────────────────────
 // Cloud Run terminates TLS at Google's front end and forwards the real client
 // IP in X-Forwarded-For. Trust that single proxy hop so the rate limiter keys
@@ -181,7 +187,11 @@ app.use(express.json({ limit: '2mb' }));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  // The billed routes report the post-debit balance in a header so the UI can
+  // update its counter without a second round-trip. Cross-origin readers only
+  // see custom headers that are explicitly exposed.
+  exposedHeaders: ['X-Credit-Balance']
 }));
 
 // ── Rate limiting (Option A: per-instance in-memory backstop) ──
@@ -206,7 +216,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 // Uses adaptive thinking + server-side web_search so the model
 // can verify claims against current sources instead of relying
 // solely on its training cutoff.
-app.post('/api/analyze', limiters.ai, async (req, res) => {
+app.post('/api/analyze', limiters.ai, auth.requireAuth(), async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   // Injection fix #1: the client sends only structured subject fields — the
@@ -232,6 +242,19 @@ app.post('/api/analyze', limiters.ai, async (req, res) => {
   // Attach cache_control so repeated audits can hit the prompt cache once the
   // prefix grows past the model's minimum threshold (a no-op below it).
   const systemBlocks = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
+
+  // Reserve the credit before spending money on the model. A 402 here is what
+  // drives the upsell in the UI; the charge is reversed below if Anthropic fails.
+  let charge;
+  try {
+    charge = await credits.debit(req.user.uid, { kind: 'analyze', ref: name.trim() });
+  } catch (err) {
+    if (err instanceof creditsLib.InsufficientCreditsError) {
+      return res.status(402).json({ error: 'Insufficient credits', balance: err.balance, required: err.required });
+    }
+    console.error('Credit debit error:', err);
+    return res.status(500).json({ error: 'Could not verify credit balance' });
+  }
 
   try {
     const message = await withRetry(() => {
@@ -275,9 +298,13 @@ app.post('/api/analyze', limiters.ai, async (req, res) => {
       if (!v.ok) console.warn('Audit output failed schema validation:', v.errors);
     }
 
+    if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
     res.json(message);
   } catch (err) {
     console.error('Analyze error:', err);
+    // The audit never happened — give the credit back. A refund failure must not
+    // mask the original error, so it is logged and swallowed.
+    await credits.refund(req.user.uid, charge).catch((e) => console.error('Refund failed:', e));
     const status = err?.status || 500;
     res.status(status).json({ error: err.message || 'Analyze failed' });
   }
@@ -293,7 +320,7 @@ app.post('/api/analyze', limiters.ai, async (req, res) => {
 // directly can NO LONGER supply or override the system prompt — so it can't be
 // used as an open Anthropic proxy on our key. Any client `system`/`messages`
 // in the body are ignored.
-app.post('/api/search', limiters.ai, async (req, res) => {
+app.post('/api/search', limiters.ai, auth.requireAuth(), async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   const { task, name } = req.body || {};
@@ -314,6 +341,20 @@ app.post('/api/search', limiters.ai, async (req, res) => {
   const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.searchMaxTokens, 3000);
   const max_uses = clampInt(built.maxUses, 1, LIMITS.searchMaxUses, 4);
 
+  // Charged per task: the opt-in Scrubber costs a credit, the Electability
+  // lookup is free (it runs automatically, so a charge would be a surprise).
+  // creditCost() returns 0 for the free task and debit() short-circuits on 0.
+  let charge;
+  try {
+    charge = await credits.debit(req.user.uid, { kind: task, ref: name.trim() });
+  } catch (err) {
+    if (err instanceof creditsLib.InsufficientCreditsError) {
+      return res.status(402).json({ error: 'Insufficient credits', balance: err.balance, required: err.required });
+    }
+    console.error('Credit debit error:', err);
+    return res.status(500).json({ error: 'Could not verify credit balance' });
+  }
+
   try {
     const message = await withRetry(() => anthropic.messages.create({
       model: MODEL,
@@ -324,9 +365,11 @@ app.post('/api/search', limiters.ai, async (req, res) => {
         { type: 'web_search_20260209', name: 'web_search', max_uses }
       ]
     }), { label: 'search' });
+    if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
     res.json(message);
   } catch (err) {
     console.error('Search error:', err);
+    await credits.refund(req.user.uid, charge).catch((e) => console.error('Refund failed:', e));
     const status = err?.status || 500;
     res.status(status).json({ error: err.message || 'Search failed' });
   }
@@ -390,6 +433,32 @@ app.post('/api/register', limiters.register, async (req, res) => {
   }
 
   res.json({ ok: true, stored, emailed });
+});
+
+// ── Account (credits + profile) ────────────────────────
+// Signed-in only. The account doc is created on first read, which is also where
+// the one-time free grant is issued — inside the same transaction that creates
+// the doc, so it can never be issued twice for the same uid.
+app.get('/api/account', auth.requireAuth(), async (req, res) => {
+  try {
+    const account = await credits.ensureAccount(req.user);
+    res.json({ account: creditsLib.publicAccount(account) });
+  } catch (err) {
+    console.error('Get account error:', err);
+    res.status(500).json({ error: 'Could not load account' });
+  }
+});
+
+// Profile update. Only the fields in profilePatch() are writable — balances,
+// plan, and Stripe ids are server-owned and cannot be set by a caller.
+app.post('/api/account', auth.requireAuth(), async (req, res) => {
+  try {
+    const account = await credits.ensureAccount(req.user, req.body || {});
+    res.json({ account: creditsLib.publicAccount(account) });
+  } catch (err) {
+    console.error('Update account error:', err);
+    res.status(500).json({ error: 'Could not update account' });
+  }
 });
 
 // ── Save audit ─────────────────────────────────────────
@@ -516,3 +585,6 @@ module.exports.__setAuthVerifier = auth.__setVerifier;
 // Test-only: inject a mock Anthropic client so the /api/analyze handler path can
 // be integration-tested without a live key or network. Never called in prod.
 module.exports.__setAnthropic = (client) => { anthropic = client; };
+// Test-only: inject a fake credit store so the billed routes can be tested
+// without Firestore. Pass null to restore the real one. Never called in prod.
+module.exports.__setCredits = (fake) => { credits = fake || creditsLib.createCredits(db); };

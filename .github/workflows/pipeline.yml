@@ -711,6 +711,11 @@ jobs:
         env:
           FRONTEND_URL: ${{ steps.dev.outputs.url }}
           EXPECTED_VERDICT: ${{ vars.EXPECTED_VERDICT }}
+          # Auto-Analyze is a billed, signed-in-only route, so the harness needs
+          # a dev-project account. Keep it topped up with credits in Firestore —
+          # the 5-credit free grant covers only five regression runs.
+          REGRESSION_USER_EMAIL: ${{ vars.REGRESSION_USER_EMAIL }}
+          REGRESSION_USER_PASSWORD: ${{ secrets.REGRESSION_USER_PASSWORD }}
         run: node test/regression.mjs
 
   # ── Rollback: manual only (workflow_dispatch) ────────────────────────────

@@ -17,7 +17,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
   - All app state lives in module-level JS variables in the inline `<script>`. Persistence is via `localStorage` (user ID + offline cache) and the backend (`/api/audits`).
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`, `express-rate-limit` (per-route rate limiting), `firebase-admin` (ID-token verification for auth).
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
-- **Storage:** Firestore Native, three collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), and `registrations` (append-only splash-registration leads).
+- **Storage:** Firestore Native, five collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), `registrations` (append-only splash-registration leads), `accounts` (uid-keyed; authoritative credit balance + profile), and `credit_ledger` (append-only record of every balance change).
 - **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** as a single gated pipeline at `.github/workflows/pipeline.yml` (PRs run tests + CodeQL + Docker build; merge to `main` re-runs them and then deploys, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflow is the reference path, not a hard dependency.
 
 ---
@@ -210,8 +210,10 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Method | Path                              | Behavior                                                  |
 |--------|-----------------------------------|-----------------------------------------------------------|
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
-| POST   | `/api/analyze`                    | Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object. |
-| POST   | `/api/search`                     | Lighter web-search proxy for the **Legislative Scrubber** and **Electability Rating**. Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
+| POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit.** Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object, plus an `X-Credit-Balance` response header. 401 anonymous, 402 out of credits. |
+| POST   | `/api/search`                     | **Signed-in only.** Lighter web-search proxy for the **Legislative Scrubber** (costs 1 credit) and **Electability Rating** (free). Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
+| GET    | `/api/account`                    | **Signed-in only.** Returns `{account}` (see `publicAccount`). Creates the account doc on first call — this is where the one-time free grant is issued. |
+| POST   | `/api/account`                    | **Signed-in only.** Merges profile fields (`firstName`, `lastName`, `org`, `role`, `acceptedTerms`). Balances, plan, and Stripe ids are server-owned and **cannot** be set by a caller. |
 | POST   | `/api/register`                   | Splash registration. Body: `{name, email, phone?, org?, isEvent?, eventName?, eventLocation?, eventDate?}`. Validates name + email, persists the lead to Firestore `registrations` (best-effort), then sends a team notification + registrant auto-reply via **Resend** (best-effort — `RESEND_API_KEY` only). Returns `{ ok:true, stored, emailed }`; email failures don't fail the request. Replaces the old `mailto:`/FormSubmit flow. |
 | POST   | `/api/audits`                     | `{userId, audit}` → adds doc with `createdAt`/`updatedAt` Firestore timestamps. |
 | GET    | `/api/audits/:userId`             | Returns audits for a user, ordered by `createdAt desc`, capped at `limit` (default 50, max 100). Timestamps converted to ISO strings. |
@@ -229,12 +231,33 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 > **Per-instance caveat.** This uses the default **in-memory** store, so counters are per Cloud Run instance — the real ceiling is up to `max-instances × limit`, not a precise global quota. It's a deliberate, stateless-friendly cost/abuse backstop (no Firestore/Redis round-trip per request), **not** a hard global cap. For an exact global limit, back the money routes with a shared store (Firestore/Redis); for volumetric/DDoS protection, add an edge limiter (Cloud Armor in front of an HTTPS LB, with ingress locked to `internal-and-cloud-load-balancing`). The two layers are complementary.
 
+### Credits (57-point scoring is free; AI is metered)
+
+`backend/lib/credits.js` owns the balance. **The client never supplies, and is never trusted for, a balance** — the browser only displays what `/api/account` and the `X-Credit-Balance` header report, and the backend re-checks and debits on every billed call.
+
+| Rule | Value |
+|------|-------|
+| Free tier | **5 credits, one-time, per registered account.** Not per browser — the anonymous `rfUserId` is a `localStorage` UUID that re-rolls on clear/incognito, so a quota keyed to it is unenforceable. |
+| Refresh | None. The free grant is issued once, inside the transaction that creates the account doc, so it can never be issued twice. |
+| AI audit (`/api/analyze`) | 1 credit |
+| Legislative Scrubber (`task: 'scrubber'`) | 1 credit — explicit opt-in, and the UI already says it costs extra |
+| Electability Rating (`task: 'electability'`) | **Free** — it runs automatically for candidates, so a charge would be a surprise |
+| Free, no account | Manual scoring, saved audits, compare, share links |
+
+**Two buckets, not one balance.** `cycleBalance` holds subscription credits (expire each cycle); `packBalance` holds purchased packs and the free grant (never expire). Debits spend `cycleBalance` **first**, and `refund()` returns credits to the exact bucket they came from so a refunded expiring credit never silently becomes a permanent one.
+
+**Reserve-then-refund, not charge-on-success.** The debit happens *before* the Anthropic call and is reversed if it throws. Charging after success would let concurrent requests all pass the same balance check and overspend. The tradeoff — a crash between debit and refund costs one credit — is recoverable via the `credit_ledger` row, which carries the subject as `ref`.
+
+**Collections:** `accounts/{uid}` (authoritative balance + profile) and `credit_ledger` (append-only; every balance change writes a row in the same transaction). The ledger needs a `(uid ASC, createdAt DESC)` composite index **only once something queries it** — nothing does yet, so no index is required today.
+
+> **Regression harness impact.** `frontend/test/regression.mjs` drives the real app's Auto-Analyze, which is now signed-in and billed. It signs in via `REGRESSION_USER_EMAIL` / `REGRESSION_USER_PASSWORD` and **fails fast** if they're unset. The dev account must exist in the Firebase project and hold credits — the 5-credit grant covers only five runs, so top it up in Firestore.
+
 ### Authentication (Firebase — additive)
 
-Auth is **optional and additive**: the app keeps its anonymous per-browser flow (a `crypto.randomUUID()` in `localStorage`), and layers Firebase Authentication (Email/Password) on top for users who want cross-device sync.
+Auth is **additive for storage, required for AI**: the app keeps its anonymous per-browser flow (a `crypto.randomUUID()` in `localStorage`) for manual scoring, saved audits, and sharing — but the **billed Anthropic routes (`/api/analyze`, `/api/search`) now require a signed-in account**, because credits can only be metered against an identity a user cannot cheaply re-roll. See [Credits](#credits-57-point-scoring-is-free-ai-is-metered).
 
 - **Client owns the credential flow.** The frontend loads the Firebase **compat** SDK from `gstatic` CDN and calls it directly for register / sign-in / **password reset** (`sendPasswordResetEmail` — enumeration-safe, expiring links, all hosted by Firebase) / email verification. **No passwords ever touch our backend**, and none of that flow lives in `buildAuditPrompt` territory — it's ordinary client code. The Firebase auth JS lives in the `AUTH (Firebase Authentication)` section of `index.html`; the modal is `#authModal` (reusing the `.modal-overlay`/`.modal` classes), triggered from the header `#authBtn`.
-- **Backend only verifies ID tokens.** `backend/lib/auth.js` verifies the `Authorization: Bearer <idToken>` with `firebase-admin` (`verifyIdToken`) and attaches `req.user = {uid, email, emailVerified}`. `optionalAuth` is mounted on all `/api/*` and **never rejects** — a missing/invalid token just means anonymous. `requireAuth` (available, not yet mounted) returns 401. No secret is needed: verification fetches Google's public keys; the Admin SDK uses the runtime SA's ADC.
+- **Backend only verifies ID tokens.** `backend/lib/auth.js` verifies the `Authorization: Bearer <idToken>` with `firebase-admin` (`verifyIdToken`) and attaches `req.user = {uid, email, emailVerified}`. `optionalAuth` is mounted on all `/api/*` and **never rejects** — a missing/invalid token just means anonymous. `requireAuth` returns 401 and **is mounted** on `/api/analyze`, `/api/search`, and both `/api/account` routes. No secret is needed: verification fetches Google's public keys; the Admin SDK uses the runtime SA's ADC.
 - **Data ownership.** The audits routes prefer `req.user.uid` over any client-supplied id, so a signed-in user's audits are keyed to their **verified** uid and the path/body id can't be used to read or delete someone else's. Anonymous callers still use their per-browser id. This preserves the existing ownership check and keeps all prior tests green.
 - **Config injection.** The public Firebase web config is injected into `window.__RF_CONFIG__.firebase` by `frontend/server.js` (same runtime-injection pattern as `BACKEND_URL`) — **only when `FIREBASE_API_KEY` is set**. If it's absent, the auth UI stays hidden and the app is fully anonymous.
 
@@ -278,6 +301,7 @@ anthropic.messages.stream({
 | `RATE_LIMIT_WINDOW_MS`  | no      | Rate-limit window length in ms. Defaults to `60000` (1 min).                                 |
 | `TRUST_PROXY_HOPS`      | no      | Proxy hops to trust for client-IP resolution behind the LB. Defaults to `1` (Cloud Run).    |
 | `FIREBASE_PROJECT_ID`   | no      | Firebase project for auth ID-token verification. Falls back to `GOOGLE_CLOUD_PROJECT`. If neither resolves, auth is disabled and every request is anonymous. |
+| `FREE_CREDITS`          | no      | One-time credit grant issued when an account is first created. Defaults to `5`. Set to `0` to disable the free tier entirely. |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
 
 | Frontend env var        | Required | Notes                                                                                        |
@@ -296,7 +320,7 @@ anthropic.messages.stream({
 
 ## Locked Prompt — DO NOT CASUALLY MODIFY
 
-`buildAuditPrompt(target, isCandidate, isCommunity)` in [frontend/public/index.html](frontend/public/index.html) is the locked prompt.
+`buildAuditPrompt(target, isCandidate, isCommunity)` in [backend/lib/prompts.js](backend/lib/prompts.js) is the locked prompt. **It moved server-side** (prompt-injection fix #1): the client now sends only structured subject fields and the backend assembles the prompt from the locked template, so a caller hitting `/api/analyze` directly cannot supply or override it. `backend/test/prompts.equivalence.test.js` proves the moved text is byte-for-byte the former client-side prompt.
 
 **Current baseline (as of the 57-pt scoring rewrite):**
 - 6 Branches criteria (the 6th is "Education Reform (Black Communities)")
@@ -323,7 +347,7 @@ Deployment targets **two stateless containers** (`root-and-fruit-backend`, `root
 
 The non-negotiable wiring:
 
-1. Provision a Firestore (or Firestore-compatible) database. The app uses three collections: `audits`, `shared_audits`, and `registrations`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations` is append-only (no ordered query), so it needs no special index.
+1. Provision a Firestore (or Firestore-compatible) database. The app uses five collections: `audits`, `shared_audits`, `registrations`, `accounts`, and `credit_ledger`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations` and `credit_ledger` are append-only and `accounts` is read by document id, so none of them need an index today (a ledger listing UI would need `(uid ASC, createdAt DESC)`).
 2. Deploy the **backend** first. It needs `ANTHROPIC_API_KEY` (from a secret store, never a plaintext env), service-account credentials with Firestore read/write, and `GOOGLE_CLOUD_PROJECT` (or equivalent) for the Firestore client. Long-running AI requests can take tens of seconds — set the platform's request timeout to ≥ 300s.
 3. Deploy the **frontend** with `BACKEND_URL` pointing at the backend's public URL. The frontend image carries no build-time config — `BACKEND_URL` is read at request time and injected into HTML via `frontend/server.js`.
 4. (Optional) Tighten CORS by setting `ALLOWED_ORIGIN` on the backend to the frontend's public URL.
@@ -464,11 +488,12 @@ function escapeHtml(v) { /* … */ }
 ## Styling Conventions
 
 - All styles are in a `<style>` block at the top of `index.html`. CSS custom properties (CSS variables) define the palette under `:root`.
-- Color palette:
-  - Background: `--black: #080808`, `--surface: #111111`, `--surface2: #1a1a1a`
-  - Borders: `--border: #2a2a2a`, `--border-light: #333`
-  - Section accents: `--gold` (Root), `--blue` (Branches), `--green` (Fruit), `--orange` (Light/Visibility), `--red` (Toxic)
-  - Text: `--text: #e8e8e8`, `--text-dim: #888`, `--text-dimmer: #555`
+- Color palette — the app is a **light/eggshell** theme with navy chrome and gold accents:
+  - Background: `--black: #F5F1E8` (eggshell — the name is a leftover from the original dark theme, **not** a dark value), `--surface: #FFFFFF`, `--surface2: #EDE9DF`
+  - Chrome: `--navy: #0D1B3E` (header, nav bar, radar chart), `--gold-bright: #E8C96A` (on-navy text)
+  - Borders: `--border: #D4CDB8`, `--border-light: #C4BC9E`
+  - Section accents: `--gold: #8B6914` (Root), `--blue: #2563a8` (Branches), `--green: #2a9d5c` (Fruit), `--orange: #c4620a` (Light/Visibility), `--red: #c0392b` (Toxic)
+  - Text: `--text: #1a1a18`, `--text-dim: #5a5248`, `--text-dimmer: #9a9080`
 - Typography: Bebas Neue (display), DM Sans (body), DM Mono (labels/badges). All loaded from Google Fonts CDN.
 - Decorative grain overlay is implemented as an inline-SVG noise filter on `body::before`.
 - Inline styles (`style="..."`) are used freely inside the dynamically-rendered audit report — keep them; don't add a CSS framework.
@@ -516,6 +541,9 @@ Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stre
 - **Do not** hardcode the backend URL into the frontend image — read it from `window.__RF_CONFIG__.backendUrl`. The runtime injection in `frontend/server.js` is load-bearing.
 - **Do not** commit any file containing the Anthropic API key, service account JSON, or other secrets.
 - **Do not** weaken Firestore ownership checks (`/api/audits/:userId/:auditId` must reject when the doc's `userId` doesn't match the path).
+- **Do not** trust a client-supplied credit balance, plan, or entitlement, and **do not** let a client-writable field reach `accounts` outside `profilePatch()`'s allowlist. The balance is server-owned; the browser's copy is display state only.
+- **Do not** grant credits from anywhere except `ensureAccount()`'s one-time grant (and, later, the signature-verified Stripe webhook). A URL parameter, a redirect, or a client call must never increase a balance.
+- **Do not** remove the `requireAuth()` gate or the debit on `/api/analyze` / `/api/search` — without them the Anthropic key is an open, unmetered bill.
 - **Do not** treat `/api/share/:token` tokens as a security boundary — they are casual share URLs only. If something stronger is needed, switch to `crypto.randomBytes`.
 - **Do not** alter the verdict thresholds, section maxima, or 57-point total without updating the verdict labels, share-card layout, and methodology copy together.
 - **Do not** introduce session affinity, in-memory caching, or sticky sessions on Cloud Run — both services are stateless.

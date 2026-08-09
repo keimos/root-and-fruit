@@ -48,6 +48,15 @@ const json = (body) => ({
   body: JSON.stringify(body)
 });
 
+// The billed AI routes require a signed-in user. A fake verifier stands in for a
+// Firebase project; the no-key guard still fires before any credit or network
+// work, which is what these tests are checking.
+const authed = (body) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good' },
+  body: JSON.stringify(body)
+});
+
 test('GET /health returns ok with a timestamp', async () => {
   const res = await fetch(`${base}/health`);
   assert.equal(res.status, 200);
@@ -68,16 +77,41 @@ test('unknown route 404s', async () => {
 
 test('POST /api/analyze without an API key returns 500', async () => {
   // anthropic is null in the test env, so the handler short-circuits before
-  // validating the body or touching the network.
-  const res = await fetch(`${base}/api/analyze`, json({ messages: [{ role: 'user', content: 'hi' }] }));
-  assert.equal(res.status, 500);
-  assert.equal((await res.json()).error, 'API key not configured');
+  // debiting credits or touching the network.
+  app.__setAuthVerifier(async () => ({ uid: 'u-test', email_verified: true }));
+  try {
+    const res = await fetch(`${base}/api/analyze`, authed({ name: 'Ada' }));
+    assert.equal(res.status, 500);
+    assert.equal((await res.json()).error, 'API key not configured');
+  } finally {
+    app.__setAuthVerifier(null);
+  }
 });
 
 test('POST /api/search without an API key returns 500', async () => {
-  const res = await fetch(`${base}/api/search`, json({ messages: [{ role: 'user', content: 'hi' }] }));
-  assert.equal(res.status, 500);
-  assert.equal((await res.json()).error, 'API key not configured');
+  app.__setAuthVerifier(async () => ({ uid: 'u-test', email_verified: true }));
+  try {
+    const res = await fetch(`${base}/api/search`, authed({ task: 'scrubber', name: 'Ada' }));
+    assert.equal(res.status, 500);
+    assert.equal((await res.json()).error, 'API key not configured');
+  } finally {
+    app.__setAuthVerifier(null);
+  }
+});
+
+test('POST /api/analyze is closed to anonymous callers (401)', async () => {
+  const res = await fetch(`${base}/api/analyze`, json({ name: 'Ada' }));
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/search is closed to anonymous callers (401)', async () => {
+  const res = await fetch(`${base}/api/search`, json({ task: 'scrubber', name: 'Ada' }));
+  assert.equal(res.status, 401);
+});
+
+test('GET /api/account is closed to anonymous callers (401)', async () => {
+  const res = await fetch(`${base}/api/account`);
+  assert.equal(res.status, 401);
 });
 
 test('POST /api/register rejects a missing name', async () => {

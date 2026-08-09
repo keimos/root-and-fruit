@@ -573,6 +573,8 @@
   .auth-switch { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 16px; }
   .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
   .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
+  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; }
+  .credit-pill.low { border-color: rgba(192,57,43,0.5); background: rgba(192,57,43,0.12); color: #e8836f; }
   .auth-account { display: flex; align-items: center; gap: 8px; }
   .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
@@ -1050,6 +1052,24 @@
 
 <!-- ══════════ ONBOARDING MODAL ══════════ -->
 <!-- ══════════ AUTH MODAL: Sign in / Register / Reset ══════════ -->
+<!-- Out-of-credits wall. Shown when a billed route answers 402. -->
+<div class="modal-overlay hidden" id="creditModal" onclick="if(event.target===this)closeCreditWall()">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-body" style="text-align:center;">
+      <div style="font-size:30px;margin-bottom:12px;"><i class="fa-solid fa-seedling" style="color:var(--gold);"></i></div>
+      <div class="auth-title">You're out of credits</div>
+      <div class="auth-sub" style="margin-bottom:18px;">
+        You've used all of your free AI audits. Manual scoring, saved audits, and
+        sharing stay open — only the AI audit needs a credit.
+      </div>
+      <button class="auth-submit" onclick="closeCreditWall()">Got it</button>
+      <div class="auth-switch" style="margin-top:12px;">
+        Paid plans are coming soon.
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this)closeAuthModal()">
   <div class="modal" style="max-width:440px;">
     <div class="modal-body">
@@ -1231,6 +1251,11 @@
         <!-- Auth: signed-out shows "Sign In"; signed-in shows email + Sign Out.
              Both hidden until Firebase auth initializes (config present). -->
         <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
+        <!-- Credit balance. Display only — the server owns the real balance and
+             re-checks it on every billed call. Hidden until an account loads. -->
+        <span class="credit-pill" id="creditPill" style="display:none;" title="Credits remaining">
+          <i class="fa-solid fa-seedling"></i> <span id="creditCount">0</span><span class="hide-xs"> credits</span>
+        </span>
         <span class="auth-account" id="authAccount" style="display:none;">
           <span class="auth-account-email" id="authAccountEmail"></span>
           <button class="btn-ghost" onclick="authLogout()">Sign Out</button>
@@ -2467,6 +2492,9 @@ RETURN JSON ONLY:
 async function autoAnalyze() {
   const name = document.getElementById('nameInput').value.trim();
   if (!name) { showToast('Enter a name first'); return; }
+  // AI audits are billed, so they require a signed-in account. Manual scoring,
+  // saved audits, and sharing remain open to anonymous users.
+  if (!requireSignIn()) return;
 
   const jurisdiction = document.getElementById('jurisdictionInput').value.trim();
   const office = document.getElementById('officeInput').value.trim();
@@ -2490,7 +2518,7 @@ async function autoAnalyze() {
     // can no longer supply or override the model instructions.
     const response = await fetch(backendUrl + '/api/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         name,
         subjectType,
@@ -2503,7 +2531,11 @@ async function autoAnalyze() {
       })
     });
 
+    // A 401/402 is an account problem, not an audit failure — surface the sign-in
+    // prompt or the credit wall instead of a red error box.
+    if (!response.ok && await handleBilledRefusal(response)) return;  // finally { setLoading(false) } still runs
     if (!response.ok) throw new Error('API Error ' + response.status);
+    noteBalanceFromResponse(response);
     const data = await response.json();
     // Adaptive thinking + web_search can leave a prose preamble (e.g. "I have
     // enough information to…") in the final text block before the JSON. Use the
@@ -2838,6 +2870,9 @@ function initFirebaseAuth() {
     firebaseAuth.onAuthStateChanged((user) => {
       currentAuthUser = user;
       updateAuthUI();
+      // Loading the account also creates it on first sign-in, which is where the
+      // one-time free credit grant is issued.
+      refreshAccount();
     });
     const btn = document.getElementById('authBtn');
     if (btn) btn.style.display = '';
@@ -3054,6 +3089,134 @@ async function authForgot() {
 async function authLogout() {
   if (!firebaseAuth) return;
   try { await firebaseAuth.signOut(); } catch (err) { console.error('Sign out failed:', err); }
+}
+
+// ══════════════════════════════════════════════
+//  CREDITS
+// ══════════════════════════════════════════════
+// The balance is authoritative on the server — this is display state only, kept
+// in sync from /api/account and from the X-Credit-Balance header the billed
+// routes return. Nothing here is ever trusted as an entitlement: the backend
+// re-checks and debits on every call, so tampering with `creditBalance` only
+// changes what this browser draws, never what the user is allowed to spend.
+
+let creditBalance = null;   // number when known, null when unknown / signed out
+
+/**
+ * Build request headers for a billed API call, attaching the Firebase ID token.
+ * in:  base (object) — headers to merge
+ * out: Promise<object> — headers including Authorization when signed in
+ */
+async function apiHeaders(base = {}) {
+  return CloudAuditStore.authHeaders(base);
+}
+
+/**
+ * Fetch the signed-in user's account (creating it, and issuing the one-time free
+ * grant, on first call) and refresh the header counter.
+ * in: none  out: Promise<object|null> — the public account object, or null when
+ *     signed out / unreachable (side effects: network, DOM)
+ */
+async function refreshAccount() {
+  if (!currentAuthUser) { creditBalance = null; updateCreditUI(); return null; }
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/account', { headers: await apiHeaders() });
+    if (!res.ok) throw new Error('Account load failed: ' + res.status);
+    const data = await res.json();
+    creditBalance = data.account ? data.account.balance : null;
+    updateCreditUI();
+    return data.account || null;
+  } catch (err) {
+    console.error('Could not load account:', err);
+    creditBalance = null;
+    updateCreditUI();
+    return null;
+  }
+}
+
+/**
+ * Redraw the header credit pill from `creditBalance`.
+ * in: none  out: void (DOM mutation)
+ */
+function updateCreditUI() {
+  const pill = document.getElementById('creditPill');
+  const count = document.getElementById('creditCount');
+  if (!pill || !count) return;
+  if (creditBalance == null) { pill.style.display = 'none'; return; }
+  pill.style.display = '';
+  count.textContent = creditBalance;
+  pill.classList.toggle('low', creditBalance <= 1);
+}
+
+/**
+ * Record a new balance reported by a billed response header.
+ * in:  response (Response) — a fetch response from a billed route
+ * out: void (updates module state + DOM)
+ */
+function noteBalanceFromResponse(response) {
+  const header = response.headers.get('X-Credit-Balance');
+  if (header == null) return;
+  const n = Number(header);
+  if (Number.isFinite(n)) { creditBalance = n; updateCreditUI(); }
+}
+
+/**
+ * Gate a billed action on being signed in. Opens the auth modal when not.
+ * in:  none
+ * out: boolean — true when the caller may proceed (side effect: may open modal)
+ */
+function requireSignIn() {
+  if (currentAuthUser) return true;
+  // Auth disabled entirely (no Firebase config injected) — let the call through
+  // and let the backend answer, so a misconfigured deploy fails loudly instead
+  // of silently blocking every audit behind a modal that cannot open.
+  if (!firebaseAuth) return true;
+  showToast('Sign in to run an AI audit');
+  openAuthModal('signin');
+  return false;
+}
+
+/**
+ * Handle a billed response that was refused for account reasons.
+ * in:  response (Response) — the fetch response, res.ok === false
+ * out: Promise<boolean> — true if this was an auth/credit refusal and has been
+ *      surfaced to the user (caller should stop); false to fall through to the
+ *      caller's normal error handling (side effects: modal / toast)
+ */
+async function handleBilledRefusal(response) {
+  if (response.status === 401) {
+    // Auth disabled (no Firebase config injected) but the backend requires it:
+    // opening the sign-in modal would be a dead end, since authLogin() no-ops
+    // without firebaseAuth. Say what is actually wrong instead.
+    if (!firebaseAuth) {
+      showToast('AI audits are unavailable — sign-in is not configured');
+      return true;
+    }
+    showToast('Please sign in again');
+    openAuthModal('signin');
+    return true;
+  }
+  if (response.status === 402) {
+    const body = await response.json().catch(() => ({}));
+    creditBalance = typeof body.balance === 'number' ? body.balance : 0;
+    updateCreditUI();
+    openCreditWall();
+    return true;
+  }
+  return false;
+}
+
+/** Show the out-of-credits wall. in: none  out: void (DOM mutation) */
+function openCreditWall() {
+  const modal = document.getElementById('creditModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+/** Hide the out-of-credits wall. in: none  out: void (DOM mutation) */
+function closeCreditWall() {
+  const modal = document.getElementById('creditModal');
+  if (modal) modal.classList.add('hidden');
 }
 
 // ══════════════════════════════════════════════
@@ -4203,10 +4366,13 @@ async function runLegislativeScrubber(target) {
     // LLM proxy. The backend fixes max_tokens/max_uses for this task.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ task: 'scrubber', name })
     });
+    // The Scrubber is billed (opt-in), so it can come back 401/402.
+    if (!response.ok && await handleBilledRefusal(response)) return;
     if (!response.ok) throw new Error('API Error ' + response.status);
+    noteBalanceFromResponse(response);
     const data = await response.json();
     renderScrubberResults(extractJSON(messageText(data)));
   } catch(err) {
@@ -4263,9 +4429,17 @@ async function runElectabilityScore() {
     // longer summary + several polls don't truncate the JSON) and max_uses.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ task: 'electability', name })
     });
+    // Electability costs no credits, but it still needs a signed-in caller.
+    // The spinner is hidden here because this function's `finally` only re-enables
+    // the button — an early return would otherwise leave it spinning forever.
+    if (!response.ok && await handleBilledRefusal(response)) {
+      document.getElementById('electabilityLoading').style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
     renderElectabilityResult(extractJSON(messageText(data)));

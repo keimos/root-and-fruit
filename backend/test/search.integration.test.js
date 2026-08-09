@@ -7,14 +7,19 @@
  *   - assembles the system prompt + messages SERVER-SIDE from a task + name
  *   - IGNORES any client-supplied system/messages (the injection hole is closed)
  *   - rejects an unknown task and a missing name
+ *   - requires a signed-in user and charges per task (Scrubber 1, Electability 0)
  * Plus unit checks on prompts.buildSearchRequest (frozen against drift).
+ *
+ * Auth and credits are faked (app.__setAuthVerifier / app.__setCredits) so the
+ * route can be driven without a Firebase project or Firestore.
  */
 
-const { test, before, after } = require('node:test');
+const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const app = require('../server');
 const prompts = require('../lib/prompts');
+const { creditCost, InsufficientCreditsError } = require('../lib/credits');
 
 const FAKE_MESSAGE = {
   stop_reason: 'end_turn',
@@ -23,6 +28,26 @@ const FAKE_MESSAGE = {
 };
 
 let server, base, captured;
+// Every debit attempt, so the per-task cost rule can be asserted directly.
+let charges = [];
+
+// In-memory stand-in for lib/credits, using the real cost table and error type
+// so the fake cannot drift from the rules the route actually enforces.
+const fakeCredits = {
+  balance: 5,
+  async debit(uid, { kind, ref } = {}) {
+    const cost = creditCost(kind);
+    charges.push({ uid, kind, ref, cost });
+    if (cost === 0) return { charged: 0, cycleDelta: 0, packDelta: 0, entryId: null, balanceAfter: null };
+    if (fakeCredits.balance < cost) throw new InsufficientCreditsError(fakeCredits.balance, cost);
+    fakeCredits.balance -= cost;
+    return { charged: cost, cycleDelta: 0, packDelta: -cost, entryId: 'entry-1', balanceAfter: fakeCredits.balance };
+  },
+  async refund(uid, charge) {
+    if (charge?.charged) fakeCredits.balance += charge.charged;
+    return null;
+  },
+};
 
 before(async () => {
   app.__setAnthropic({
@@ -31,18 +56,28 @@ before(async () => {
       create: (args) => { captured = args; return FAKE_MESSAGE; },
     },
   });
+  app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  app.__setCredits(fakeCredits);
   await new Promise((resolve) => {
     server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; resolve(); });
   });
 });
 
+beforeEach(() => { charges = []; fakeCredits.balance = 5; });
+
 after(async () => {
   app.__setAnthropic(null);
+  app.__setAuthVerifier(null);
+  app.__setCredits(null);
   await new Promise((resolve) => server.close(resolve));
 });
 
-const post = (body) =>
-  fetch(`${base}/api/search`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const post = (body, headers = {}) =>
+  fetch(`${base}/api/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good', ...headers },
+    body: JSON.stringify(body),
+  });
 
 // ── server-side assembly ───────────────────────────────
 test('/api/search assembles the scrubber prompt server-side from task + name', async () => {
@@ -95,6 +130,53 @@ test('/api/search rejects a missing name with 400', async () => {
   const res = await post({ task: 'scrubber' });
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /name required/i);
+});
+
+// ── auth + credits ─────────────────────────────────────
+test('/api/search requires a signed-in user (401 without a token)', async () => {
+  const res = await fetch(`${base}/api/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task: 'scrubber', name: 'Ada' }),
+  });
+  assert.equal(res.status, 401);
+  assert.equal(charges.length, 0, 'no debit attempted for an anonymous caller');
+});
+
+test('/api/search charges 1 credit for the opt-in Scrubber', async () => {
+  const res = await post({ task: 'scrubber', name: 'Ada' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(charges.map((c) => [c.kind, c.cost]), [['scrubber', 1]]);
+  assert.equal(fakeCredits.balance, 4);
+  assert.equal(res.headers.get('x-credit-balance'), '4');
+});
+
+test('/api/search does NOT charge for the automatic Electability lookup', async () => {
+  const res = await post({ task: 'electability', name: 'Ada' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(charges.map((c) => [c.kind, c.cost]), [['electability', 0]]);
+  assert.equal(fakeCredits.balance, 5, 'balance untouched');
+});
+
+test('/api/search returns 402 with the balance when credits run out', async () => {
+  fakeCredits.balance = 0;
+  const res = await post({ task: 'scrubber', name: 'Ada' });
+  assert.equal(res.status, 402);
+  const body = await res.json();
+  assert.match(body.error, /insufficient credits/i);
+  assert.equal(body.balance, 0);
+  assert.equal(body.required, 1);
+});
+
+test('/api/search refunds the credit when the Anthropic call fails', async () => {
+  app.__setAnthropic({ messages: { create: () => { const e = new Error('boom'); e.status = 400; throw e; } } });
+  try {
+    const res = await post({ task: 'scrubber', name: 'Ada' });
+    assert.equal(res.status, 400);
+    assert.equal(fakeCredits.balance, 5, 'credit returned — the lookup never happened');
+  } finally {
+    app.__setAnthropic({ messages: { create: (args) => { captured = args; return FAKE_MESSAGE; } } });
+  }
 });
 
 // ── buildSearchRequest unit + drift guard ──────────────
