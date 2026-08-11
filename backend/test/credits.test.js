@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 
 const {
   createCredits, creditCost, totalBalance, planDebit, profilePatch,
-  publicAccount, InsufficientCreditsError, CREDIT_COSTS
+  publicAccount, grantIssued, InsufficientCreditsError, CREDIT_COSTS, FREE_CREDIT_GRANT
 } = require('../lib/credits');
 
 // ── Fake Firestore ─────────────────────────────────────
@@ -71,7 +71,10 @@ function fakeFirestore(seed = {}) {
   return { db, store, ids };
 }
 
-const USER = { uid: 'u-1', email: 'a@b.com' };
+// The free grant is gated on a verified address, so the default fixture is a
+// verified user; UNVERIFIED covers the just-registered, not-yet-clicked state.
+const USER = { uid: 'u-1', email: 'a@b.com', emailVerified: true };
+const UNVERIFIED = { uid: 'u-1', email: 'a@b.com', emailVerified: false };
 /** Build a credits API over a fake db with a fixed timestamp. */
 const build = (seed, grant = 5) => {
   const f = fakeFirestore(seed);
@@ -147,6 +150,13 @@ test('publicAccount: flattens the buckets into one balance for the UI', () => {
   assert.equal(view.plan, 'free');
 });
 
+// The free-tier size is a product decision, not an implementation detail — pin
+// it so a refactor cannot quietly change what new accounts are worth. Skipped
+// when the environment overrides it, since then the default is not in play.
+test('the default free grant is 3 credits', { skip: !!process.env.FREE_CREDITS }, () => {
+  assert.equal(FREE_CREDIT_GRANT, 3);
+});
+
 // ── ensureAccount ──────────────────────────────────────
 test('ensureAccount: creates the account with the free grant and a ledger row', async () => {
   const { credits, store } = build();
@@ -172,6 +182,100 @@ test('ensureAccount: is idempotent — the grant is never issued twice', async (
   assert.equal(store.get('accounts/u-1').packBalance, 5, 'still 5, not 15');
   const ledger = [...store.keys()].filter((k) => k.startsWith('credit_ledger/'));
   assert.equal(ledger.length, 1, 'only one grant row');
+});
+
+// ── ensureAccount: the free grant is gated on a verified address ───────
+// Without this gate the credit quota is unenforceable: an unverified Firebase
+// account is free to mint, so `you+2@…` would collect another 5 Opus calls.
+test('ensureAccount: an unverified account is created with zero credits', async () => {
+  const { credits, store } = build();
+  const account = await credits.ensureAccount(UNVERIFIED);
+
+  assert.equal(account.packBalance, 0, 'no grant before the address is verified');
+  assert.equal(account.lifetimeGranted, 0);
+  assert.equal(account.freeGrantIssued, false);
+  const ledger = [...store.keys()].filter((k) => k.startsWith('credit_ledger/'));
+  assert.equal(ledger.length, 0, 'nothing granted, nothing to record');
+});
+
+test('ensureAccount: re-registering unverified never accumulates credits', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(UNVERIFIED);
+  await credits.ensureAccount(UNVERIFIED);
+  await credits.ensureAccount(UNVERIFIED);
+
+  assert.equal(store.get('accounts/u-1').packBalance, 0);
+});
+
+test('ensureAccount: the grant is paid out on the first call after verification', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(UNVERIFIED);
+  const verified = await credits.ensureAccount(USER);
+
+  assert.equal(verified.packBalance, 5, 'clicking the link earns the grant');
+  assert.equal(verified.freeGrantIssued, true);
+  assert.equal(store.get('accounts/u-1').lifetimeGranted, 5);
+
+  const ledger = [...store.entries()].filter(([k]) => k.startsWith('credit_ledger/'));
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0][1].delta, 5);
+  assert.equal(ledger[0][1].balanceAfter, 5);
+});
+
+test('ensureAccount: verifying twice does not grant twice', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(UNVERIFIED);
+  await credits.ensureAccount(USER);
+  await credits.ensureAccount(USER);
+  await credits.ensureAccount(USER, { org: 'Anvil' });
+
+  assert.equal(store.get('accounts/u-1').packBalance, 5, 'still 5, not 15');
+  const ledger = [...store.keys()].filter((k) => k.startsWith('credit_ledger/'));
+  assert.equal(ledger.length, 1, 'only one grant row');
+});
+
+test('ensureAccount: the grant tops up rather than overwriting a spent balance', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(UNVERIFIED);
+  // Simulate a purchased pack landing before the user got round to verifying.
+  store.get('accounts/u-1').packBalance = 3;
+
+  await credits.ensureAccount(USER);
+  assert.equal(store.get('accounts/u-1').packBalance, 8, '3 existing + 5 granted');
+});
+
+// A doc written before `freeGrantIssued` existed was granted at creation time.
+// Its positive lifetimeGranted must stand in for the flag, or every legacy
+// account would collect a second grant on its next /api/account call.
+test('ensureAccount: a legacy account without the flag is not granted again', async () => {
+  const legacy = {
+    'accounts/u-1': {
+      uid: 'u-1', email: 'a@b.com', cycleBalance: 0, packBalance: 2,
+      lifetimeGranted: 5, lifetimeSpent: 3, plan: 'free'
+      // note: no freeGrantIssued field at all
+    }
+  };
+  const { credits, store } = build(legacy);
+  await credits.ensureAccount(USER);
+
+  assert.equal(store.get('accounts/u-1').packBalance, 2, 'no second grant');
+  const ledger = [...store.keys()].filter((k) => k.startsWith('credit_ledger/'));
+  assert.equal(ledger.length, 0);
+});
+
+test('grantIssued: reads the flag, falling back to lifetimeGranted for legacy docs', () => {
+  assert.equal(grantIssued({ freeGrantIssued: true }), true);
+  assert.equal(grantIssued({ freeGrantIssued: false, lifetimeGranted: 0 }), false);
+  assert.equal(grantIssued({ lifetimeGranted: 5 }), true, 'legacy: granted at creation');
+  assert.equal(grantIssued({}), false);
+  assert.equal(grantIssued(null), false);
+});
+
+test('publicAccount: reports verification so the UI can explain a zero balance', () => {
+  const account = { uid: 'u', cycleBalance: 0, packBalance: 0, lifetimeGranted: 0 };
+  assert.equal(publicAccount(account, { emailVerified: false }).emailVerified, false);
+  assert.equal(publicAccount(account, { emailVerified: true }).emailVerified, true);
+  assert.equal(publicAccount(account).emailVerified, false, 'absent user → not verified');
 });
 
 test('ensureAccount: merges profile fields into an existing account', async () => {

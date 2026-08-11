@@ -571,10 +571,15 @@
   .auth-alert.err { background: rgba(200,40,40,0.12); border: 1px solid rgba(200,40,40,0.4); color: #ffb0b0; }
   .auth-alert.ok { background: rgba(40,160,90,0.12); border: 1px solid rgba(40,160,90,0.4); color: #9ce0b6; }
   .auth-switch { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 16px; }
+  /* Inline status under a modal action (verification resend / recheck). */
+  .auth-switch.auth-ok { color: var(--green); }
+  .auth-switch.auth-err { color: var(--red); }
   .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
   .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
   .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; }
   .credit-pill.low { border-color: rgba(192,57,43,0.5); background: rgba(192,57,43,0.12); color: #e8836f; }
+  /* Signed in but unconfirmed: the free grant is waiting, not spent. */
+  .credit-pill.unverified { border-style: dashed; }
   .auth-account { display: flex; align-items: center; gap: 8px; }
   .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
@@ -874,7 +879,7 @@
           <div class="onboard-title">Create Your Account</div>
           <div class="onboard-body">
             An account saves your audits across devices and unlocks
-            <strong style="color:var(--text);">5 free AI audits</strong>.
+            <strong style="color:var(--text);">3 free AI audits</strong>.
             You can also look around first — manual scoring, saved audits, and
             sharing never require one.
           </div>
@@ -1091,6 +1096,26 @@
       <div class="auth-switch" style="margin-top:12px;">
         Paid plans are coming soon.
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Verify-your-email wall. Shown when a billed route answers 403
+     email_unverified — the free credits are held until the address is
+     confirmed, which is what keeps the quota from being farmed. -->
+<div class="modal-overlay hidden" id="verifyModal" onclick="if(event.target===this)closeVerifyWall()">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-body" style="text-align:center;">
+      <div style="font-size:30px;margin-bottom:12px;"><i class="fa-solid fa-envelope-circle-check" style="color:var(--gold);"></i></div>
+      <div class="auth-title">Confirm your email</div>
+      <div class="auth-sub" style="margin-bottom:18px;">
+        We sent a verification link to <strong id="verifyEmailTarget"></strong>.
+        Click it to unlock your free AI audits. Manual scoring, saved audits, and
+        sharing stay open either way.
+      </div>
+      <button class="auth-submit" onclick="confirmVerification()">I've verified — check again</button>
+      <button class="btn-ghost" style="margin-top:10px;" onclick="resendVerification()">Resend the email</button>
+      <div class="auth-switch" id="verifyNote"></div>
     </div>
   </div>
 </div>
@@ -3166,6 +3191,10 @@ async function authLogout() {
 // changes what this browser draws, never what the user is allowed to spend.
 
 let creditBalance = null;   // number when known, null when unknown / signed out
+// Whether the server saw a verified address on the last /api/account call. The
+// free grant is withheld until it is true, so this is what separates "you spent
+// your credits" from "verify your address to receive them".
+let accountVerified = false;
 
 /**
  * Build request headers for a billed API call, attaching the Firebase ID token.
@@ -3183,13 +3212,14 @@ async function apiHeaders(base = {}) {
  *     signed out / unreachable (side effects: network, DOM)
  */
 async function refreshAccount() {
-  if (!currentAuthUser) { creditBalance = null; updateCreditUI(); return null; }
+  if (!currentAuthUser) { creditBalance = null; accountVerified = false; updateCreditUI(); return null; }
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
     const res = await fetch(backendUrl + '/api/account', { headers: await apiHeaders() });
     if (!res.ok) throw new Error('Account load failed: ' + res.status);
     const data = await res.json();
     creditBalance = data.account ? data.account.balance : null;
+    accountVerified = !!(data.account && data.account.emailVerified);
     updateCreditUI();
     return data.account || null;
   } catch (err) {
@@ -3198,6 +3228,30 @@ async function refreshAccount() {
     updateCreditUI();
     return null;
   }
+}
+
+/**
+ * Re-read the Firebase user and mint a fresh ID token, then reload the account.
+ *
+ * Clicking the verification link does NOT update the token already cached in
+ * this tab — `email_verified` is a claim baked in at issue time, so the backend
+ * keeps seeing an unverified user (and keeps withholding the grant) until the
+ * token is refreshed. reload() pulls the new state and getIdToken(true) forces
+ * a new token carrying it.
+ * in: none
+ * out: Promise<boolean> — true once the server confirms a verified address
+ *      (side effects: network, updates creditBalance/accountVerified + DOM)
+ */
+async function recheckVerification() {
+  if (!currentAuthUser) return false;
+  try {
+    await currentAuthUser.reload();
+    await currentAuthUser.getIdToken(true);
+  } catch (err) {
+    console.error('Could not refresh the session:', err);
+  }
+  await refreshAccount();
+  return accountVerified;
 }
 
 /**
@@ -3212,6 +3266,13 @@ function updateCreditUI() {
   pill.style.display = '';
   count.textContent = creditBalance;
   pill.classList.toggle('low', creditBalance <= 1);
+  // A signed-in user with an unconfirmed address has 0 credits for a reason the
+  // number alone does not explain — make the pill the way back to the wall.
+  const pending = currentAuthUser && !accountVerified;
+  pill.classList.toggle('unverified', !!pending);
+  pill.title = pending ? 'Verify your email to receive your free credits' : 'Credits remaining';
+  pill.onclick = pending ? openVerifyWall : null;
+  pill.style.cursor = pending ? 'pointer' : '';
 }
 
 /**
@@ -3262,6 +3323,18 @@ async function handleBilledRefusal(response) {
     openAuthModal('signin');
     return true;
   }
+  // The address has not been verified, so the free grant was never issued and
+  // billed work is refused. Distinct from 402 on purpose: telling a brand-new
+  // user they are "out of credits" when they have never spent one is a dead end.
+  if (response.status === 403) {
+    const body = await response.json().catch(() => ({}));
+    if (body.code === 'email_unverified') {
+      accountVerified = false;
+      openVerifyWall();
+      return true;
+    }
+    return false;
+  }
   if (response.status === 402) {
     const body = await response.json().catch(() => ({}));
     creditBalance = typeof body.balance === 'number' ? body.balance : 0;
@@ -3270,6 +3343,63 @@ async function handleBilledRefusal(response) {
     return true;
   }
   return false;
+}
+
+/** Show the verify-your-email wall. in: none  out: void (DOM mutation) */
+function openVerifyWall() {
+  const modal = document.getElementById('verifyModal');
+  if (!modal) return;
+  const target = document.getElementById('verifyEmailTarget');
+  if (target) target.textContent = (currentAuthUser && currentAuthUser.email) || 'your address';
+  const note = document.getElementById('verifyNote');
+  if (note) { note.textContent = ''; note.className = 'auth-switch'; }
+  modal.classList.remove('hidden');
+}
+
+/** Hide the verify-your-email wall. in: none  out: void (DOM mutation) */
+function closeVerifyWall() {
+  const modal = document.getElementById('verifyModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/**
+ * Re-send the Firebase verification email for the signed-in user.
+ * in: none  out: Promise<void> (side effects: network, updates the modal note)
+ */
+async function resendVerification() {
+  const note = document.getElementById('verifyNote');
+  if (!currentAuthUser) return;
+  try {
+    await currentAuthUser.sendEmailVerification();
+    if (note) { note.textContent = 'Sent. Check your inbox (and spam).'; note.className = 'auth-switch auth-ok'; }
+  } catch (err) {
+    // Firebase rate-limits resends; say so rather than showing a raw code.
+    if (note) {
+      note.textContent = (err && err.code === 'auth/too-many-requests')
+        ? 'Too many requests — wait a minute and try again.'
+        : 'Could not send right now. Try again shortly.';
+      note.className = 'auth-switch auth-err';
+    }
+  }
+}
+
+/**
+ * Handle the "I've verified" button: refresh the session and, when the server
+ * agrees, close the wall and report the newly-granted credits.
+ * in: none  out: Promise<void> (side effects: network, DOM, toast)
+ */
+async function confirmVerification() {
+  const note = document.getElementById('verifyNote');
+  if (note) { note.textContent = 'Checking…'; note.className = 'auth-switch'; }
+  if (await recheckVerification()) {
+    closeVerifyWall();
+    showToast(creditBalance ? `Verified — ${creditBalance} credits added` : 'Email verified');
+    return;
+  }
+  if (note) {
+    note.textContent = 'Still unverified. Click the link in the email, then try again.';
+    note.className = 'auth-switch auth-err';
+  }
 }
 
 /** Show the out-of-credits wall. in: none  out: void (DOM mutation) */

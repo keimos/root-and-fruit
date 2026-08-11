@@ -31,7 +31,7 @@ const LEDGER = 'credit_ledger';
 // not expire) and are never replenished — see the free-tier decision in CLAUDE.md.
 const FREE_CREDIT_GRANT = Number.parseInt(process.env.FREE_CREDITS, 10) >= 0
   ? Number.parseInt(process.env.FREE_CREDITS, 10)
-  : 5;
+  : 3;
 
 // What each billable unit of work costs. `electability` is 0 because it runs
 // automatically for every candidate audit — charging for work the user did not
@@ -107,6 +107,7 @@ function planDebit(account, cost) {
  * Pure: build a fresh account document for a newly-seen user.
  * @param {{uid: string, email: string|null}} user  the verified Firebase user
  * @param {number} grant                            free credits to seed into packBalance
+ *        (0 when the address is not yet verified — see grantIssued/ensureAccount)
  * @param {*} ts                                    timestamp value for createdAt/updatedAt
  * @returns {object}                                the account document to write
  */
@@ -131,9 +132,25 @@ function newAccount(user, grant, ts) {
     acceptedAt: null,
     lifetimeGranted: grant,
     lifetimeSpent: 0,
+    // Idempotency marker for the one-time free grant. False when the account was
+    // created before the address was verified — ensureAccount issues the grant on
+    // a later call, once Firebase reports email_verified.
+    freeGrantIssued: grant > 0,
     createdAt: ts,
     updatedAt: ts
   };
+}
+
+/**
+ * Pure: has this account already received its one-time free grant?
+ * Tolerates accounts written before `freeGrantIssued` existed — those were all
+ * granted at creation time, so a positive `lifetimeGranted` means "already
+ * issued" and prevents a second grant on their next /api/account call.
+ * @param {object} account  the stored account document (may be partial/legacy)
+ * @returns {boolean}       true when no further free grant is owed
+ */
+function grantIssued(account) {
+  return account?.freeGrantIssued === true || (account?.lifetimeGranted || 0) > 0;
 }
 
 /**
@@ -162,10 +179,13 @@ function profilePatch(input = {}, ts = null) {
  * secrets on the doc) but flattens the two buckets into the single `balance` the
  * UI displays, and drops the Stripe ids the browser has no use for.
  * @param {object} account  the stored account document
+ * @param {{emailVerified?: boolean}} [user]  the verified token claims, so the UI
+ *        can tell "no credits left" apart from "verify your email to get them"
  * @returns {object}        the public view of the account
  */
-function publicAccount(account) {
+function publicAccount(account, user) {
   return {
+    emailVerified: !!user?.emailVerified,
     uid: account.uid,
     email: account.email,
     firstName: account.firstName,
@@ -194,35 +214,68 @@ function createCredits(db, opts = {}) {
   const grant = Number.isInteger(opts.grant) ? opts.grant : FREE_CREDIT_GRANT;
 
   /**
-   * Fetch the account, creating it (with the one-time free grant) if this is the
-   * first time we've seen this uid. Idempotent: the grant is written inside the
-   * same transaction that creates the doc, so it can never be issued twice.
-   * @param {{uid: string, email: string|null}} user  the verified Firebase user
+   * Fetch the account, creating it on first sight of this uid, and issue the
+   * one-time free grant as soon as the address is verified.
+   *
+   * The grant is gated on `emailVerified` because it is the only thing making
+   * the credit quota enforceable. An unverified Firebase account costs nothing
+   * to mint — anyone could register `you+2@…`, collect another free grant, and
+   * spend it on Opus calls. Requiring the verification click makes each grant
+   * cost one real, deliverable inbox.
+   *
+   * Issued at most once, guaranteed by `grantIssued()` being re-checked inside
+   * the transaction: an account created before verification gets 0 credits, and
+   * the first call after the user clicks the link tops it up and sets the flag.
+   * @param {{uid: string, email: string|null, emailVerified?: boolean}} user
+   *        the verified Firebase user (claims from the ID token)
    * @param {object} [profile]  optional profile fields to merge (see profilePatch)
    * @returns {Promise<object>}  the stored account document
    */
   async function ensureAccount(user, profile = {}) {
     const accRef = db.collection(ACCOUNTS).doc(user.uid);
     const ledgerRef = db.collection(LEDGER).doc();
+    // Only a verified address earns the grant; everyone else starts at zero.
+    const earned = user.emailVerified ? grant : 0;
     return db.runTransaction(async (tx) => {
       const snap = await tx.get(accRef);
       const ts = now();
       if (snap.exists) {
+        const existing = snap.data();
         const patch = profilePatch(profile, ts);
-        if (Object.keys(patch).length === 0) return snap.data();
+        // Verified since the account was created → pay out the grant now. This
+        // is the only path that can add credits to an existing account, and
+        // grantIssued() makes it a no-op on every subsequent call.
+        const owed = earned > 0 && !grantIssued(existing) ? earned : 0;
+        if (owed > 0) {
+          patch.packBalance = Math.max(0, existing.packBalance || 0) + owed;
+          patch.lifetimeGranted = (existing.lifetimeGranted || 0) + owed;
+          patch.freeGrantIssued = true;
+        }
+        if (Object.keys(patch).length === 0) return existing;
         patch.updatedAt = ts;
         tx.update(accRef, patch);
-        return { ...snap.data(), ...patch };
+        if (owed > 0) {
+          tx.set(ledgerRef, {
+            uid: user.uid,
+            delta: owed,
+            reason: 'free_grant',
+            bucket: 'pack',
+            balanceAfter: totalBalance({ ...existing, packBalance: patch.packBalance }),
+            ref: null,
+            createdAt: ts
+          });
+        }
+        return { ...existing, ...patch };
       }
-      const account = { ...newAccount(user, grant, ts), ...profilePatch(profile, ts) };
+      const account = { ...newAccount(user, earned, ts), ...profilePatch(profile, ts) };
       tx.set(accRef, account);
-      if (grant > 0) {
+      if (earned > 0) {
         tx.set(ledgerRef, {
           uid: user.uid,
-          delta: grant,
+          delta: earned,
           reason: 'free_grant',
           bucket: 'pack',
-          balanceAfter: grant,
+          balanceAfter: earned,
           ref: null,
           createdAt: ts
         });
@@ -337,6 +390,7 @@ module.exports = {
   totalBalance,
   planDebit,
   newAccount,
+  grantIssued,
   profilePatch,
   publicAccount,
   InsufficientCreditsError,

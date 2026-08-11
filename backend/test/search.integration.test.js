@@ -158,6 +158,32 @@ test('/api/search does NOT charge for the automatic Electability lookup', async 
   assert.equal(fakeCredits.balance, 5, 'balance untouched');
 });
 
+// The verification gate follows the money: it blocks the billed Scrubber but
+// must leave the free Electability lookup alone, since that fires automatically
+// and the user never opted into it.
+test('/api/search refuses the billed Scrubber for an unverified address', async () => {
+  app.__setAuthVerifier(async () => ({ uid: 'u-new', email: 'a@b.com', email_verified: false }));
+  try {
+    const res = await post({ task: 'scrubber', name: 'Ada' });
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).code, 'email_unverified');
+    assert.equal(charges.length, 0, 'no debit attempted');
+  } finally {
+    app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  }
+});
+
+test('/api/search still allows the free Electability lookup when unverified', async () => {
+  app.__setAuthVerifier(async () => ({ uid: 'u-new', email: 'a@b.com', email_verified: false }));
+  try {
+    const res = await post({ task: 'electability', name: 'Ada' });
+    assert.equal(res.status, 200, 'free work is not gated on verification');
+    assert.equal(fakeCredits.balance, 5);
+  } finally {
+    app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  }
+});
+
 test('/api/search returns 402 with the balance when credits run out', async () => {
   fakeCredits.balance = 0;
   const res = await post({ task: 'scrubber', name: 'Ada' });

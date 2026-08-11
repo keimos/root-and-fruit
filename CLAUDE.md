@@ -212,7 +212,7 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
 | POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit.** Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object, plus an `X-Credit-Balance` response header. 401 anonymous, 402 out of credits. |
 | POST   | `/api/search`                     | **Signed-in only.** Lighter web-search proxy for the **Legislative Scrubber** (costs 1 credit) and **Electability Rating** (free). Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
-| GET    | `/api/account`                    | **Signed-in only.** Returns `{account}` (see `publicAccount`). Creates the account doc on first call — this is where the one-time free grant is issued. |
+| GET    | `/api/account`                    | **Signed-in only.** Returns `{account}` (see `publicAccount`, which also reports `emailVerified`). Creates the account doc on first call, and issues the one-time free grant on the first call where the token says the address is verified. |
 | POST   | `/api/account`                    | **Signed-in only.** Merges profile fields (`firstName`, `lastName`, `org`, `role`, `acceptedTerms`). Balances, plan, and Stripe ids are server-owned and **cannot** be set by a caller. |
 | POST   | `/api/register`                   | Splash registration. Body: `{name, email, phone?, org?, isEvent?, eventName?, eventLocation?, eventDate?}`. Validates name + email, persists the lead to Firestore `registrations` (best-effort), then sends a team notification + registrant auto-reply via **Resend** (best-effort — `RESEND_API_KEY` only). Returns `{ ok:true, stored, emailed }`; email failures don't fail the request. Replaces the old `mailto:`/FormSubmit flow. |
 | POST   | `/api/audits`                     | `{userId, audit}` → adds doc with `createdAt`/`updatedAt` Firestore timestamps. |
@@ -237,8 +237,8 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 | Rule | Value |
 |------|-------|
-| Free tier | **5 credits, one-time, per registered account.** Not per browser — the anonymous `rfUserId` is a `localStorage` UUID that re-rolls on clear/incognito, so a quota keyed to it is unenforceable. |
-| Refresh | None. The free grant is issued once, inside the transaction that creates the account doc, so it can never be issued twice. |
+| Free tier | **3 credits, one-time, per registered account with a _verified_ email.** Not per browser — the anonymous `rfUserId` is a `localStorage` UUID that re-rolls on clear/incognito, so a quota keyed to it is unenforceable. Verification is the other half of that: an unverified Firebase account is just as cheap to re-mint (`you+2@…`), so a grant keyed to it would be equally unenforceable. Requiring the click makes each grant cost one real, deliverable inbox. |
+| Refresh | None. The free grant is issued at most once, guarded by `grantIssued()` re-checked inside the transaction. An account created before verification starts at **0** credits and is topped up on the first `/api/account` call after the link is clicked. |
 | AI audit (`/api/analyze`) | 1 credit |
 | Legislative Scrubber (`task: 'scrubber'`) | 1 credit — explicit opt-in, and the UI already says it costs extra |
 | Electability Rating (`task: 'electability'`) | **Free** — it runs automatically for candidates, so a charge would be a surprise |
@@ -248,9 +248,13 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 **Reserve-then-refund, not charge-on-success.** The debit happens *before* the Anthropic call and is reversed if it throws. Charging after success would let concurrent requests all pass the same balance check and overspend. The tradeoff — a crash between debit and refund costs one credit — is recoverable via the `credit_ledger` row, which carries the subject as `ref`.
 
+**Verification gate.** Two enforcement points, both server-side. `ensureAccount()` withholds the grant until the ID token carries `email_verified` — that is the one that matters, since it is what stops a farmed account from ever holding credits. `billableAllowed()` in `server.js` additionally refuses **cost > 0** work with `403 {code: 'email_unverified'}`, so an unverified user gets an actionable error instead of a confusing "out of credits". Zero-cost work (Electability) is deliberately **not** gated: it fires automatically, so blocking it would break a call the user never made. Note the claim is baked into the token at issue time — the frontend's `recheckVerification()` must `reload()` + `getIdToken(true)` after the user clicks the link, or the backend keeps seeing the stale `false`.
+
+**Legacy accounts.** `grantIssued()` falls back to `lifetimeGranted > 0` for docs written before the `freeGrantIssued` flag existed. Without that fallback every pre-existing account would collect a *second* grant on its next `/api/account` call. Don't "simplify" it to a bare flag read.
+
 **Collections:** `accounts/{uid}` (authoritative balance + profile) and `credit_ledger` (append-only; every balance change writes a row in the same transaction). The ledger needs a `(uid ASC, createdAt DESC)` composite index **only once something queries it** — nothing does yet, so no index is required today.
 
-> **Regression harness impact.** `frontend/test/regression.mjs` drives the real app's Auto-Analyze, which is now signed-in and billed. It signs in via `REGRESSION_USER_EMAIL` / `REGRESSION_USER_PASSWORD` and **fails fast** if they're unset. The dev account must exist in the Firebase project and hold credits — the 5-credit grant covers only five runs, so top it up in Firestore.
+> **Regression harness impact.** `frontend/test/regression.mjs` drives the real app's Auto-Analyze, which is now signed-in and billed. It signs in via `REGRESSION_USER_EMAIL` (repo/Environment **variable**) and `REGRESSION_USER_PASSWORD` (Actions **secret** — never a variable; variables are plaintext and unmasked in logs) and **fails fast** if they're unset. The dev account must exist in the Firebase project, have a **verified** address (unverified accounts receive no grant), and hold credits — the free grant covers only three runs, so top it up in Firestore.
 
 ### Authentication (Firebase — additive)
 
@@ -301,7 +305,7 @@ anthropic.messages.stream({
 | `RATE_LIMIT_WINDOW_MS`  | no      | Rate-limit window length in ms. Defaults to `60000` (1 min).                                 |
 | `TRUST_PROXY_HOPS`      | no      | Proxy hops to trust for client-IP resolution behind the LB. Defaults to `1` (Cloud Run).    |
 | `FIREBASE_PROJECT_ID`   | no      | Firebase project for auth ID-token verification. Falls back to `GOOGLE_CLOUD_PROJECT`. If neither resolves, auth is disabled and every request is anonymous. |
-| `FREE_CREDITS`          | no      | One-time credit grant issued when an account is first created. Defaults to `5`. Set to `0` to disable the free tier entirely. |
+| `FREE_CREDITS`          | no      | One-time credit grant issued when an account's address is first seen verified. Defaults to `3`. Set to `0` to disable the free tier entirely. Forwarded by the pipeline from the optional `FREE_CREDITS` repo/Environment variable. |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
 
 | Frontend env var        | Required | Notes                                                                                        |
@@ -382,7 +386,7 @@ Configuration lives in **GitHub repo variables** (Settings → Secrets and varia
 | `GCP_REGION` | Cloud Run region (e.g. `us-central1`). |
 | `GCP_WIF_PROVIDER` | Full workload-identity-provider resource name. |
 | `GCP_DEPLOY_SA` | Deploy service-account email the workflow impersonates. |
-| *(optional)* `ANTHROPIC_MODEL`, `REGISTRATION_EMAIL`, `REGISTRATION_FROM`, `DONATION_URL`, `ALLOWED_ORIGIN`, `APP_VERSION` | Passed through as env vars only when set; unset → the app's built-in defaults apply. |
+| *(optional)* `ANTHROPIC_MODEL`, `REGISTRATION_EMAIL`, `REGISTRATION_FROM`, `DONATION_URL`, `ALLOWED_ORIGIN`, `FREE_CREDITS`, `APP_VERSION` | Passed through as env vars only when set; unset → the app's built-in defaults apply. |
 | *(optional, enables auth)* `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID` (+ `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`) | Public Firebase web config, forwarded to the frontend deploy (and `FIREBASE_PROJECT_ID` to the backend). Set per-Environment (development/production) for separate Firebase projects. Any absent → auth stays off, frontend fully anonymous. |
 
 One-time GCP setup (not automated — run once by an operator): enable the `run`, `cloudbuild`, `artifactregistry`, `iamcredentials`, and `secretmanager` APIs; create the two Secret Manager secrets; create the deploy SA with `run.admin` + `cloudbuild.builds.editor` + `artifactregistry.admin` + `storage.admin` + `iam.serviceAccountUser`; grant the **runtime** SA `datastore.user` + `secretmanager.secretAccessor`; and create the WIF pool/provider bound to this repo. The `audits` composite index still must be created manually — the workflow does not manage Firestore indexes.
@@ -543,6 +547,7 @@ Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stre
 - **Do not** weaken Firestore ownership checks (`/api/audits/:userId/:auditId` must reject when the doc's `userId` doesn't match the path).
 - **Do not** trust a client-supplied credit balance, plan, or entitlement, and **do not** let a client-writable field reach `accounts` outside `profilePatch()`'s allowlist. The balance is server-owned; the browser's copy is display state only.
 - **Do not** grant credits from anywhere except `ensureAccount()`'s one-time grant (and, later, the signature-verified Stripe webhook). A URL parameter, a redirect, or a client call must never increase a balance.
+- **Do not** issue the free grant to an unverified address, and do not drop the `billableAllowed()` check on the billed routes. Without the verification gate the credit quota is decorative — a throwaway `+alias` mints another 5 Opus calls, and the Anthropic bill is unbounded.
 - **Do not** remove the `requireAuth()` gate or the debit on `/api/analyze` / `/api/search` — without them the Anthropic key is an open, unmetered bill.
 - **Do not** treat `/api/share/:token` tokens as a security boundary — they are casual share URLs only. If something stronger is needed, switch to `crypto.randomBytes`.
 - **Do not** alter the verdict thresholds, section maxima, or 57-point total without updating the verdict labels, share-card layout, and methodology copy together.

@@ -148,6 +148,22 @@ test('/api/analyze debits exactly one credit and reports the new balance', async
   assert.equal(res.headers.get('x-credit-balance'), '4');
 });
 
+// An unverified account is free to mint, so letting one spend would make the
+// credit quota unenforceable — refuse before the debit, not after.
+test('/api/analyze refuses an unverified address with 403 and no debit', async () => {
+  app.__setAuthVerifier(async () => ({ uid: 'u-new', email: 'a@b.com', email_verified: false }));
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.code, 'email_unverified');
+    assert.equal(charges.length, 0, 'no debit attempted');
+    assert.equal(fakeCredits.balance, 5, 'balance untouched');
+  } finally {
+    app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  }
+});
+
 test('/api/analyze returns 402 with the balance when credits run out', async () => {
   fakeCredits.balance = 0;
   const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });

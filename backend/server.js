@@ -208,6 +208,29 @@ app.use('/api/', limiters.api);
 // client-supplied id so a signed-in user cannot be spoofed. See lib/auth.js.
 app.use('/api/', auth.optionalAuth());
 
+/**
+ * Refuse billed work for an account whose email address is not verified.
+ *
+ * Defence in depth alongside the grant gate in credits.ensureAccount(): an
+ * unverified account is free to mint, so anything it can spend money on is
+ * effectively unmetered. Free-of-charge work (the automatic Electability
+ * lookup) is deliberately left open — blocking it would break a call the user
+ * never asked for. Sends the 403 itself so callers can `return` on false.
+ * @param {import('express').Request} req   the request (req.user is set by requireAuth)
+ * @param {import('express').Response} res  the response, written on refusal
+ * @param {string} kind  the work kind, as keyed in credits CREDIT_COSTS
+ * @returns {boolean}  true when the caller may proceed; false once a 403 is sent
+ */
+function billableAllowed(req, res, kind) {
+  if (creditsLib.creditCost(kind) <= 0) return true;
+  if (req.user && req.user.emailVerified) return true;
+  res.status(403).json({
+    error: 'Email verification required',
+    code: 'email_unverified'
+  });
+  return false;
+}
+
 // ── Health check ───────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
@@ -245,6 +268,7 @@ app.post('/api/analyze', limiters.ai, auth.requireAuth(), async (req, res) => {
 
   // Reserve the credit before spending money on the model. A 402 here is what
   // drives the upsell in the UI; the charge is reversed below if Anthropic fails.
+  if (!billableAllowed(req, res, 'analyze')) return;
   let charge;
   try {
     charge = await credits.debit(req.user.uid, { kind: 'analyze', ref: name.trim() });
@@ -343,7 +367,9 @@ app.post('/api/search', limiters.ai, auth.requireAuth(), async (req, res) => {
 
   // Charged per task: the opt-in Scrubber costs a credit, the Electability
   // lookup is free (it runs automatically, so a charge would be a surprise).
-  // creditCost() returns 0 for the free task and debit() short-circuits on 0.
+  // creditCost() returns 0 for the free task and debit() short-circuits on 0 —
+  // which is also why the verification gate below lets Electability through.
+  if (!billableAllowed(req, res, task)) return;
   let charge;
   try {
     charge = await credits.debit(req.user.uid, { kind: task, ref: name.trim() });
@@ -442,7 +468,7 @@ app.post('/api/register', limiters.register, async (req, res) => {
 app.get('/api/account', auth.requireAuth(), async (req, res) => {
   try {
     const account = await credits.ensureAccount(req.user);
-    res.json({ account: creditsLib.publicAccount(account) });
+    res.json({ account: creditsLib.publicAccount(account, req.user) });
   } catch (err) {
     console.error('Get account error:', err);
     res.status(500).json({ error: 'Could not load account' });
@@ -454,7 +480,7 @@ app.get('/api/account', auth.requireAuth(), async (req, res) => {
 app.post('/api/account', auth.requireAuth(), async (req, res) => {
   try {
     const account = await credits.ensureAccount(req.user, req.body || {});
-    res.json({ account: creditsLib.publicAccount(account) });
+    res.json({ account: creditsLib.publicAccount(account, req.user) });
   } catch (err) {
     console.error('Update account error:', err);
     res.status(500).json({ error: 'Could not update account' });
