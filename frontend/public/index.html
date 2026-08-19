@@ -7,6 +7,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Firebase Authentication (compat build — exposes a global `firebase` usable
+     from the app's non-module inline script). Loads only the app + auth SDKs. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
 <style>
   :root {
     /* Eggshell / light theme. --black is the page background (kept named
@@ -546,6 +550,38 @@
   }
   .modal-header { padding: 28px 28px 0; text-align: center; }
   .modal-body { padding: 20px 28px 28px; }
+  /* ── Auth modal (Sign in / Register / Reset) ── */
+  .auth-title { font-family: 'Bebas Neue', sans-serif; font-size: 30px; letter-spacing: 0.06em; text-align: center; margin-bottom: 4px; }
+  .auth-sub { font-size: 13px; color: var(--text-dim); text-align: center; margin-bottom: 22px; }
+  .auth-panel { display: none; }
+  .auth-panel.active { display: block; }
+  .auth-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .auth-field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+  .auth-input { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; width: 100%; }
+  .auth-input:focus { outline: none; border-color: var(--gold); }
+  .auth-input.invalid { border-color: var(--red); }
+  .auth-row { display: flex; gap: 10px; }
+  .auth-row .auth-field { flex: 1; }
+  .auth-field-error { font-size: 11px; color: var(--red); min-height: 14px; }
+  .auth-submit { width: 100%; padding: 13px; border: none; border-radius: 8px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; background: var(--gold); color: #fff; transition: background 0.2s; }
+  .auth-submit:hover { background: #a37e1a; }
+  .auth-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .auth-alert { font-size: 13px; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; display: none; }
+  .auth-alert.show { display: block; }
+  .auth-alert.err { background: rgba(200,40,40,0.12); border: 1px solid rgba(200,40,40,0.4); color: #ffb0b0; }
+  .auth-alert.ok { background: rgba(40,160,90,0.12); border: 1px solid rgba(40,160,90,0.4); color: #9ce0b6; }
+  .auth-switch { font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 16px; }
+  /* Inline status under a modal action (verification resend / recheck). */
+  .auth-switch.auth-ok { color: var(--green); }
+  .auth-switch.auth-err { color: var(--red); }
+  .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
+  .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
+  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; }
+  .credit-pill.low { border-color: rgba(192,57,43,0.5); background: rgba(192,57,43,0.12); color: #e8836f; }
+  /* Signed in but unconfirmed: the free grant is waiting, not spent. */
+  .credit-pill.unverified { border-style: dashed; }
+  .auth-account { display: flex; align-items: center; gap: 8px; }
+  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .onboard-icon { font-size: 48px; display: block; margin-bottom: 16px; text-align: center; }
@@ -831,6 +867,31 @@
 
   <div class="splash-body" id="splashBody">
 
+    <!-- ── ACCOUNT CARD: shown first, ahead of "Before You Begin" ──
+         Buttons open the existing #authModal rather than duplicating the form,
+         so there is exactly one sign-in/register implementation to maintain.
+         Skippable by design: manual scoring, saved audits, and sharing stay
+         open to anonymous users — only AI audits require an account. -->
+    <div id="splashAuthWrap" style="display:none;align-items:center;justify-content:center;min-height:100%;padding:24px 0;">
+      <div class="modal" style="max-width:480px;width:100%;">
+        <div class="modal-body" style="text-align:center;">
+          <span class="onboard-icon">🌳</span>
+          <div class="onboard-title">Create Your Account</div>
+          <div class="onboard-body">
+            An account saves your audits across devices and unlocks
+            <strong style="color:var(--text);">3 free AI audits</strong>.
+            You can also look around first — manual scoring, saved audits, and
+            sharing never require one.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;margin:20px 0 14px;">
+            <button class="btn-onboard-next" onclick="splashOpenAuth('register')" style="width:100%;">Create Account →</button>
+            <button class="btn-onboard-skip" onclick="splashOpenAuth('signin')" style="width:100%;">I already have an account</button>
+          </div>
+          <button class="auth-link" onclick="splashSkipAuth()" style="font-size:12px;">Continue without an account</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── ONBOARDING CARD: 4 steps centered in overlay ── -->
     <div id="splashOnboardWrap" style="display:flex;align-items:center;justify-content:center;min-height:100%;padding:24px 0;">
       <div class="modal" style="max-width:560px;width:100%;">
@@ -935,7 +996,7 @@
             </div>
             <div class="onboard-nav">
               <button class="btn-onboard-skip" onclick="splashPrev()">← Back</button>
-              <button class="btn-onboard-next" id="btnStep1Next" onclick="goToRegistration()" disabled>Continue to Registration →</button>
+              <button class="btn-onboard-next" id="btnStep1Next" onclick="splashFinish()" disabled>Continue →</button>
             </div>
           </div>
 
@@ -1020,6 +1081,120 @@
 </div>
 
 <!-- ══════════ ONBOARDING MODAL ══════════ -->
+<!-- ══════════ AUTH MODAL: Sign in / Register / Reset ══════════ -->
+<!-- Out-of-credits wall. Shown when a billed route answers 402. -->
+<div class="modal-overlay hidden" id="creditModal" onclick="if(event.target===this)closeCreditWall()">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-body" style="text-align:center;">
+      <div style="font-size:30px;margin-bottom:12px;"><i class="fa-solid fa-seedling" style="color:var(--gold);"></i></div>
+      <div class="auth-title">You're out of credits</div>
+      <div class="auth-sub" style="margin-bottom:18px;">
+        You've used all of your free AI audits. Manual scoring, saved audits, and
+        sharing stay open — only the AI audit needs a credit.
+      </div>
+      <button class="auth-submit" onclick="closeCreditWall()">Got it</button>
+      <div class="auth-switch" style="margin-top:12px;">
+        Paid plans are coming soon.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Verify-your-email wall. Shown when a billed route answers 403
+     email_unverified — the free credits are held until the address is
+     confirmed, which is what keeps the quota from being farmed. -->
+<div class="modal-overlay hidden" id="verifyModal" onclick="if(event.target===this)closeVerifyWall()">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-body" style="text-align:center;">
+      <div style="font-size:30px;margin-bottom:12px;"><i class="fa-solid fa-envelope-circle-check" style="color:var(--gold);"></i></div>
+      <div class="auth-title">Confirm your email</div>
+      <div class="auth-sub" style="margin-bottom:18px;">
+        We sent a verification link to <strong id="verifyEmailTarget"></strong>.
+        Click it to unlock your free AI audits. Manual scoring, saved audits, and
+        sharing stay open either way.
+      </div>
+      <button class="auth-submit" onclick="confirmVerification()">I've verified — check again</button>
+      <button class="btn-ghost" style="margin-top:10px;" onclick="resendVerification()">Resend the email</button>
+      <div class="auth-switch" id="verifyNote"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this)closeAuthModal()">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-body">
+      <div class="auth-alert err" id="authError"></div>
+      <div class="auth-alert ok" id="authNotice"></div>
+
+      <!-- Sign in -->
+      <div class="auth-panel" id="auth-signin">
+        <div class="auth-title">Welcome Back</div>
+        <div class="auth-sub">Sign in to sync your audits across devices</div>
+        <div class="auth-field">
+          <label for="siEmail">Email</label>
+          <input class="auth-input" id="siEmail" type="email" autocomplete="email" onblur="validateAuthField('siEmail','email')">
+          <div class="auth-field-error" id="siEmail-err"></div>
+        </div>
+        <div class="auth-field">
+          <label for="siPassword">Password</label>
+          <input class="auth-input" id="siPassword" type="password" autocomplete="current-password">
+          <div class="auth-field-error" id="siPassword-err"></div>
+        </div>
+        <button class="auth-submit" id="siSubmit" onclick="authLogin()">Sign In</button>
+        <div class="auth-switch" style="margin-top:12px;">
+          <button class="auth-link" onclick="switchAuthPanel('forgot')">Forgot password?</button>
+        </div>
+        <div class="auth-switch">New here? <button class="auth-link" onclick="switchAuthPanel('register')">Create an account</button></div>
+      </div>
+
+      <!-- Register -->
+      <div class="auth-panel" id="auth-register">
+        <div class="auth-title">Create Account</div>
+        <div class="auth-sub">Save and sync your Integrity Index audits</div>
+        <div class="auth-row">
+          <div class="auth-field">
+            <label for="rgFirst">First name</label>
+            <input class="auth-input" id="rgFirst" type="text" autocomplete="given-name" onblur="validateAuthField('rgFirst','name')">
+            <div class="auth-field-error" id="rgFirst-err"></div>
+          </div>
+          <div class="auth-field">
+            <label for="rgLast">Last name</label>
+            <input class="auth-input" id="rgLast" type="text" autocomplete="family-name" onblur="validateAuthField('rgLast','name')">
+            <div class="auth-field-error" id="rgLast-err"></div>
+          </div>
+        </div>
+        <div class="auth-field">
+          <label for="rgEmail">Email</label>
+          <input class="auth-input" id="rgEmail" type="email" autocomplete="email" onblur="validateAuthField('rgEmail','email')">
+          <div class="auth-field-error" id="rgEmail-err"></div>
+        </div>
+        <div class="auth-field">
+          <label for="rgPassword">Password</label>
+          <input class="auth-input" id="rgPassword" type="password" autocomplete="new-password" oninput="validateAuthField('rgPassword','password')">
+          <div class="auth-field-error" id="rgPassword-err"></div>
+        </div>
+        <div class="auth-hint">At least 12 characters. A memorable passphrase beats a short complex one.</div>
+        <button class="auth-submit" id="rgSubmit" onclick="authRegister()">Create Account</button>
+        <div class="auth-switch">Already have an account? <button class="auth-link" onclick="switchAuthPanel('signin')">Sign in</button></div>
+      </div>
+
+      <!-- Forgot password -->
+      <div class="auth-panel" id="auth-forgot">
+        <div class="auth-title">Reset Password</div>
+        <div class="auth-sub">We'll email you a secure reset link</div>
+        <div class="auth-field">
+          <label for="fpEmail">Email</label>
+          <input class="auth-input" id="fpEmail" type="email" autocomplete="email" onblur="validateAuthField('fpEmail','email')">
+          <div class="auth-field-error" id="fpEmail-err"></div>
+        </div>
+        <button class="auth-submit" id="fpSubmit" onclick="authForgot()">Send Reset Link</button>
+        <div class="auth-switch">Remembered it? <button class="auth-link" onclick="switchAuthPanel('signin')">Back to sign in</button></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="onboardModal">
   <div class="modal">
     <div class="modal-body">
@@ -1123,6 +1298,18 @@
         <button class="btn-ghost" onclick="showOnboarding()"><i class="fa-solid fa-circle-question"></i> <span class="hide-xs">How it Works</span></button>
         <button class="btn-ghost" onclick="showView('saved')"><i class="fa-solid fa-folder-open"></i> <span class="hide-xs">Saved</span></button>
         <button class="btn-ghost" onclick="resetAll()">Reset</button>
+        <!-- Auth: signed-out shows "Sign In"; signed-in shows email + Sign Out.
+             Both hidden until Firebase auth initializes (config present). -->
+        <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
+        <!-- Credit balance. Display only — the server owns the real balance and
+             re-checks it on every billed call. Hidden until an account loads. -->
+        <span class="credit-pill" id="creditPill" style="display:none;" title="Credits remaining">
+          <i class="fa-solid fa-seedling"></i> <span id="creditCount">0</span><span class="hide-xs"> credits</span>
+        </span>
+        <span class="auth-account" id="authAccount" style="display:none;">
+          <span class="auth-account-email" id="authAccountEmail"></span>
+          <button class="btn-ghost" onclick="authLogout()">Sign Out</button>
+        </span>
       </div>
       <div id="liveScore">0</div>
     </div>
@@ -2355,6 +2542,9 @@ RETURN JSON ONLY:
 async function autoAnalyze() {
   const name = document.getElementById('nameInput').value.trim();
   if (!name) { showToast('Enter a name first'); return; }
+  // AI audits are billed, so they require a signed-in account. Manual scoring,
+  // saved audits, and sharing remain open to anonymous users.
+  if (!requireSignIn()) return;
 
   const jurisdiction = document.getElementById('jurisdictionInput').value.trim();
   const office = document.getElementById('officeInput').value.trim();
@@ -2378,7 +2568,7 @@ async function autoAnalyze() {
     // can no longer supply or override the model instructions.
     const response = await fetch(backendUrl + '/api/analyze', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         name,
         subjectType,
@@ -2391,7 +2581,11 @@ async function autoAnalyze() {
       })
     });
 
+    // A 401/402 is an account problem, not an audit failure — surface the sign-in
+    // prompt or the credit wall instead of a red error box.
+    if (!response.ok && await handleBilledRefusal(response)) return;  // finally { setLoading(false) } still runs
     if (!response.ok) throw new Error('API Error ' + response.status);
+    noteBalanceFromResponse(response);
     const data = await response.json();
     // Adaptive thinking + web_search can leave a prose preamble (e.g. "I have
     // enough information to…") in the final text block before the JSON. Use the
@@ -2638,6 +2832,10 @@ function renderAuditSection(title, color, items, labels, type) {
 //  CLOUD AUDIT STORE
 // ══════════════════════════════════════════════
 const CloudAuditStore = {
+  // Returns the per-browser anonymous id. When signed in, the backend keys
+  // audits to the verified Firebase uid instead (it ignores this value), so this
+  // remains the fallback identity for anonymous use.
+  // in: none  out: string — stable per-browser UUID from localStorage
   getUserId() {
     let id = localStorage.getItem('rfUserId');
     if (!id) { id = crypto.randomUUID(); localStorage.setItem('rfUserId', id); }
@@ -2648,10 +2846,18 @@ const CloudAuditStore = {
     return (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
   },
 
+  // Build request headers, attaching a Firebase ID token when the user is signed
+  // in so the backend can scope the request to their account.
+  // in: base (object) — base headers to merge  out: Promise<object> — headers
+  async authHeaders(base = {}) {
+    const token = await getIdToken();
+    return token ? { ...base, Authorization: `Bearer ${token}` } : { ...base };
+  },
+
   async save(audit) {
     const res = await fetch(`${this.getBackendUrl()}/api/audits`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await this.authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ userId: this.getUserId(), audit })
     });
     if (!res.ok) throw new Error('Cloud save failed: ' + res.status);
@@ -2659,7 +2865,9 @@ const CloudAuditStore = {
   },
 
   async loadAll() {
-    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}`);
+    const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}`, {
+      headers: await this.authHeaders()
+    });
     if (!res.ok) throw new Error('Cloud load failed: ' + res.status);
     const data = await res.json();
     return data.audits || [];
@@ -2667,7 +2875,8 @@ const CloudAuditStore = {
 
   async delete(auditId) {
     const res = await fetch(`${this.getBackendUrl()}/api/audits/${this.getUserId()}/${auditId}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: await this.authHeaders()
     });
     if (!res.ok) throw new Error('Cloud delete failed: ' + res.status);
   },
@@ -2675,7 +2884,7 @@ const CloudAuditStore = {
   async createShareLink(audit) {
     const res = await fetch(`${this.getBackendUrl()}/api/share`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await this.authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ audit })
     });
     if (!res.ok) throw new Error('Share failed: ' + res.status);
@@ -2683,6 +2892,527 @@ const CloudAuditStore = {
     return `${window.location.origin}/shared/${data.token}`;
   }
 };
+
+// ══════════════════════════════════════════════
+//  AUTH (Firebase Authentication)
+// ══════════════════════════════════════════════
+// The client SDK handles registration, sign-in, password reset, and email
+// verification directly against Firebase; the backend only verifies the ID
+// token. Auth is additive — if no Firebase config is injected, the UI stays
+// hidden and the app runs fully anonymously (per-browser id).
+
+const AUTH_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUTH_MIN_PASSWORD = 12;
+let firebaseAuth = null;          // firebase.auth() instance, or null when disabled
+let currentAuthUser = null;       // the signed-in firebase.User, or null
+
+/**
+ * Initialize Firebase Auth from injected runtime config, if present.
+ * Wires an auth-state listener and reveals the header auth control.
+ * in: none  out: void (side effects: firebase init, DOM reveal)
+ */
+function initFirebaseAuth() {
+  const cfg = window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase;
+  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') return; // auth disabled
+  try {
+    firebase.initializeApp(cfg);
+    firebaseAuth = firebase.auth();
+    firebaseAuth.onAuthStateChanged((user) => {
+      currentAuthUser = user;
+      updateAuthUI();
+      // Loading the account also creates it on first sign-in, which is where the
+      // one-time free credit grant is issued.
+      refreshAccount();
+      // Advances the splash past the account card once a session resolves —
+      // covers both a fresh sign-in and a restored one on page load.
+      splashOnAuthChange();
+    });
+    const btn = document.getElementById('authBtn');
+    if (btn) btn.style.display = '';
+  } catch (err) {
+    console.error('Firebase auth init failed:', err);
+  }
+}
+
+/**
+ * Get a fresh Firebase ID token for the signed-in user.
+ * in: none  out: Promise<string|null> — the ID token, or null if signed out
+ */
+async function getIdToken() {
+  if (!currentAuthUser) return null;
+  try { return await currentAuthUser.getIdToken(); } catch { return null; }
+}
+
+/**
+ * Reflect the current auth state in the header (Sign In vs email + Sign Out).
+ * in: none  out: void (DOM mutation)
+ */
+function updateAuthUI() {
+  const btn = document.getElementById('authBtn');
+  const acct = document.getElementById('authAccount');
+  const email = document.getElementById('authAccountEmail');
+  if (!btn || !acct) return;
+  if (currentAuthUser) {
+    btn.style.display = 'none';
+    acct.style.display = '';
+    if (email) email.textContent = currentAuthUser.email || 'Account';
+  } else {
+    btn.style.display = '';
+    acct.style.display = 'none';
+  }
+}
+
+/**
+ * Open the auth modal on a given panel.
+ * in: panel (string) — 'signin' | 'register' | 'forgot'  out: void (DOM)
+ */
+function openAuthModal(panel = 'signin') {
+  clearAuthAlerts();
+  switchAuthPanel(panel);
+  document.getElementById('authModal').classList.remove('hidden');
+}
+
+/** Close the auth modal and clear any alerts. in: none  out: void (DOM) */
+function closeAuthModal() {
+  const modal = document.getElementById('authModal');
+  modal.classList.add('hidden');
+  modal.style.zIndex = '';   // drop any lift applied when opened over the splash
+  clearAuthAlerts();
+}
+
+/**
+ * Show one auth panel and hide the others.
+ * in: panel (string) — 'signin' | 'register' | 'forgot'  out: void (DOM)
+ */
+function switchAuthPanel(panel) {
+  clearAuthAlerts();
+  ['signin', 'register', 'forgot'].forEach((p) => {
+    const el = document.getElementById('auth-' + p);
+    if (el) el.classList.toggle('active', p === panel);
+  });
+}
+
+/** Clear both auth alert banners. in: none  out: void (DOM) */
+function clearAuthAlerts() {
+  ['authError', 'authNotice'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) { el.classList.remove('show'); el.textContent = ''; }
+  });
+}
+
+/**
+ * Show an auth alert banner.
+ * in: kind ('err'|'ok'), msg (string)  out: void (DOM)
+ */
+function showAuthAlert(kind, msg) {
+  clearAuthAlerts();
+  const el = document.getElementById(kind === 'ok' ? 'authNotice' : 'authError');
+  if (el) { el.textContent = msg; el.classList.add('show'); }
+}
+
+/**
+ * Validate one auth field and render its inline error.
+ * in: id (string) input element id, type ('email'|'name'|'password')
+ * out: boolean — true if valid (also toggles .invalid + writes #<id>-err)
+ */
+function validateAuthField(id, type) {
+  const input = document.getElementById(id);
+  const errEl = document.getElementById(id + '-err');
+  const val = (input.value || '').trim();
+  let msg = '';
+  if (type === 'email') {
+    if (!val) msg = 'Email is required.';
+    else if (!AUTH_EMAIL_RE.test(val) || val.length > 254) msg = 'Enter a valid email address.';
+  } else if (type === 'name') {
+    if (!val) msg = 'Required.';
+    else if (val.length > 100) msg = 'Too long.';
+  } else if (type === 'password') {
+    if (val.length < AUTH_MIN_PASSWORD) msg = `Use at least ${AUTH_MIN_PASSWORD} characters.`;
+  }
+  if (input) input.classList.toggle('invalid', !!msg);
+  if (errEl) errEl.textContent = msg;
+  return !msg;
+}
+
+/**
+ * Map a Firebase auth error to a friendly, enumeration-safe message.
+ * in: err (Error with optional .code)  out: string
+ */
+function authErrorMessage(err) {
+  switch (err && err.code) {
+    case 'auth/email-already-in-use': return 'An account with this email already exists.';
+    case 'auth/invalid-email':        return "That email doesn't look right.";
+    case 'auth/weak-password':        return 'That password is too weak.';
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+    case 'auth/invalid-credential':   return 'Incorrect email or password.';
+    case 'auth/too-many-requests':    return 'Too many attempts. Please wait a bit and try again.';
+    case 'auth/network-request-failed': return 'Network error — check your connection.';
+    default: return (err && err.message) || 'Something went wrong. Please try again.';
+  }
+}
+
+/** Enable/disable a submit button while a request is in flight. in: id, busy(bool)  out: void */
+function setAuthBusy(id, busy) {
+  const btn = document.getElementById(id);
+  if (btn) btn.disabled = busy;
+}
+
+/**
+ * Register a new account (email/password), set the display name, and send a
+ * verification email. Validates all fields client-side first.
+ * in: none (reads form)  out: Promise<void> (Firebase calls, DOM)
+ */
+async function authRegister() {
+  if (!firebaseAuth) return;
+  const okFirst = validateAuthField('rgFirst', 'name');
+  const okLast = validateAuthField('rgLast', 'name');
+  const okEmail = validateAuthField('rgEmail', 'email');
+  const okPass = validateAuthField('rgPassword', 'password');
+  if (!(okFirst && okLast && okEmail && okPass)) return;
+
+  const first = document.getElementById('rgFirst').value.trim();
+  const last = document.getElementById('rgLast').value.trim();
+  const email = document.getElementById('rgEmail').value.trim();
+  const password = document.getElementById('rgPassword').value;
+
+  setAuthBusy('rgSubmit', true);
+  try {
+    const cred = await firebaseAuth.createUserWithEmailAndPassword(email, password);
+    await cred.user.updateProfile({ displayName: `${first} ${last}`.trim() });
+    try { await cred.user.sendEmailVerification(); } catch { /* non-fatal */ }
+    // Account creation IS the registration: this is what fires the Firestore
+    // lead capture and the Resend welcome email, so signed-up users are never
+    // asked to fill the separate splash lead form. Best-effort — a delivery or
+    // network failure must not undo an account that already exists.
+    try { await submitAccountRegistration(first, last, email); } catch (err) { console.error('Lead capture failed:', err); }
+    showAuthAlert('ok', 'Account created! Check your email to verify your address.');
+    setTimeout(closeAuthModal, 1800);
+  } catch (err) {
+    showAuthAlert('err', authErrorMessage(err));
+  } finally {
+    setAuthBusy('rgSubmit', false);
+  }
+}
+
+/**
+ * Send a new account's details to /api/register (Firestore lead capture +
+ * Resend welcome email). Replaces the separate splash lead form for anyone who
+ * registers through the auth modal.
+ * in:  first (string), last (string), email (string) — from the register form
+ * out: Promise<void> (network call; throws on a non-OK response so the caller
+ *      can log it — never fatal to account creation)
+ */
+async function submitAccountRegistration(first, last, email) {
+  const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+  const res = await fetch(backendUrl + '/api/register', {
+    method: 'POST',
+    headers: await apiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name: `${first} ${last}`.trim(), email })
+  });
+  if (!res.ok) throw new Error('Registration capture failed: ' + res.status);
+}
+
+/**
+ * Sign in with email + password.
+ * in: none (reads form)  out: Promise<void> (Firebase call, DOM)
+ */
+async function authLogin() {
+  if (!firebaseAuth) return;
+  const okEmail = validateAuthField('siEmail', 'email');
+  const password = document.getElementById('siPassword').value;
+  if (!okEmail || !password) {
+    if (!password) document.getElementById('siPassword-err').textContent = 'Password is required.';
+    return;
+  }
+  const email = document.getElementById('siEmail').value.trim();
+  setAuthBusy('siSubmit', true);
+  try {
+    await firebaseAuth.signInWithEmailAndPassword(email, password);
+    closeAuthModal();
+  } catch (err) {
+    showAuthAlert('err', authErrorMessage(err));
+  } finally {
+    setAuthBusy('siSubmit', false);
+  }
+}
+
+/**
+ * Send a password-reset email. Always shows the same generic confirmation
+ * (even for an unknown address) so the form can't be used to enumerate accounts.
+ * in: none (reads form)  out: Promise<void> (Firebase call, DOM)
+ */
+async function authForgot() {
+  if (!firebaseAuth) return;
+  if (!validateAuthField('fpEmail', 'email')) return;
+  const email = document.getElementById('fpEmail').value.trim();
+  const generic = "If an account exists for that email, we've sent a reset link.";
+  setAuthBusy('fpSubmit', true);
+  try {
+    await firebaseAuth.sendPasswordResetEmail(email);
+    showAuthAlert('ok', generic);
+  } catch (err) {
+    // Don't leak existence: treat "no such user" as success.
+    if (err && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email')) {
+      showAuthAlert('ok', generic);
+    } else {
+      showAuthAlert('err', authErrorMessage(err));
+    }
+  } finally {
+    setAuthBusy('fpSubmit', false);
+  }
+}
+
+/**
+ * Sign the current user out and return them to the login/registration screen.
+ * The splash is only re-opened when the sign-out actually succeeded — bouncing
+ * a still-signed-in user to a login screen would be worse than doing nothing.
+ * in: none  out: Promise<void> (Firebase call, DOM mutation)
+ */
+async function authLogout() {
+  if (!firebaseAuth) return;
+  try {
+    await firebaseAuth.signOut();
+  } catch (err) {
+    console.error('Sign out failed:', err);
+    showToast('Could not sign out — please try again');
+    return;
+  }
+  resetSplashToAccount();
+}
+
+// ══════════════════════════════════════════════
+//  CREDITS
+// ══════════════════════════════════════════════
+// The balance is authoritative on the server — this is display state only, kept
+// in sync from /api/account and from the X-Credit-Balance header the billed
+// routes return. Nothing here is ever trusted as an entitlement: the backend
+// re-checks and debits on every call, so tampering with `creditBalance` only
+// changes what this browser draws, never what the user is allowed to spend.
+
+let creditBalance = null;   // number when known, null when unknown / signed out
+// Whether the server saw a verified address on the last /api/account call. The
+// free grant is withheld until it is true, so this is what separates "you spent
+// your credits" from "verify your address to receive them".
+let accountVerified = false;
+
+/**
+ * Build request headers for a billed API call, attaching the Firebase ID token.
+ * in:  base (object) — headers to merge
+ * out: Promise<object> — headers including Authorization when signed in
+ */
+async function apiHeaders(base = {}) {
+  return CloudAuditStore.authHeaders(base);
+}
+
+/**
+ * Fetch the signed-in user's account (creating it, and issuing the one-time free
+ * grant, on first call) and refresh the header counter.
+ * in: none  out: Promise<object|null> — the public account object, or null when
+ *     signed out / unreachable (side effects: network, DOM)
+ */
+async function refreshAccount() {
+  if (!currentAuthUser) { creditBalance = null; accountVerified = false; updateCreditUI(); return null; }
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/account', { headers: await apiHeaders() });
+    if (!res.ok) throw new Error('Account load failed: ' + res.status);
+    const data = await res.json();
+    creditBalance = data.account ? data.account.balance : null;
+    accountVerified = !!(data.account && data.account.emailVerified);
+    updateCreditUI();
+    return data.account || null;
+  } catch (err) {
+    console.error('Could not load account:', err);
+    creditBalance = null;
+    updateCreditUI();
+    return null;
+  }
+}
+
+/**
+ * Re-read the Firebase user and mint a fresh ID token, then reload the account.
+ *
+ * Clicking the verification link does NOT update the token already cached in
+ * this tab — `email_verified` is a claim baked in at issue time, so the backend
+ * keeps seeing an unverified user (and keeps withholding the grant) until the
+ * token is refreshed. reload() pulls the new state and getIdToken(true) forces
+ * a new token carrying it.
+ * in: none
+ * out: Promise<boolean> — true once the server confirms a verified address
+ *      (side effects: network, updates creditBalance/accountVerified + DOM)
+ */
+async function recheckVerification() {
+  if (!currentAuthUser) return false;
+  try {
+    await currentAuthUser.reload();
+    await currentAuthUser.getIdToken(true);
+  } catch (err) {
+    console.error('Could not refresh the session:', err);
+  }
+  await refreshAccount();
+  return accountVerified;
+}
+
+/**
+ * Redraw the header credit pill from `creditBalance`.
+ * in: none  out: void (DOM mutation)
+ */
+function updateCreditUI() {
+  const pill = document.getElementById('creditPill');
+  const count = document.getElementById('creditCount');
+  if (!pill || !count) return;
+  if (creditBalance == null) { pill.style.display = 'none'; return; }
+  pill.style.display = '';
+  count.textContent = creditBalance;
+  pill.classList.toggle('low', creditBalance <= 1);
+  // A signed-in user with an unconfirmed address has 0 credits for a reason the
+  // number alone does not explain — make the pill the way back to the wall.
+  const pending = currentAuthUser && !accountVerified;
+  pill.classList.toggle('unverified', !!pending);
+  pill.title = pending ? 'Verify your email to receive your free credits' : 'Credits remaining';
+  pill.onclick = pending ? openVerifyWall : null;
+  pill.style.cursor = pending ? 'pointer' : '';
+}
+
+/**
+ * Record a new balance reported by a billed response header.
+ * in:  response (Response) — a fetch response from a billed route
+ * out: void (updates module state + DOM)
+ */
+function noteBalanceFromResponse(response) {
+  const header = response.headers.get('X-Credit-Balance');
+  if (header == null) return;
+  const n = Number(header);
+  if (Number.isFinite(n)) { creditBalance = n; updateCreditUI(); }
+}
+
+/**
+ * Gate a billed action on being signed in. Opens the auth modal when not.
+ * in:  none
+ * out: boolean — true when the caller may proceed (side effect: may open modal)
+ */
+function requireSignIn() {
+  if (currentAuthUser) return true;
+  // Auth disabled entirely (no Firebase config injected) — let the call through
+  // and let the backend answer, so a misconfigured deploy fails loudly instead
+  // of silently blocking every audit behind a modal that cannot open.
+  if (!firebaseAuth) return true;
+  showToast('Sign in to run an AI audit');
+  openAuthModal('signin');
+  return false;
+}
+
+/**
+ * Handle a billed response that was refused for account reasons.
+ * in:  response (Response) — the fetch response, res.ok === false
+ * out: Promise<boolean> — true if this was an auth/credit refusal and has been
+ *      surfaced to the user (caller should stop); false to fall through to the
+ *      caller's normal error handling (side effects: modal / toast)
+ */
+async function handleBilledRefusal(response) {
+  if (response.status === 401) {
+    // Auth disabled (no Firebase config injected) but the backend requires it:
+    // opening the sign-in modal would be a dead end, since authLogin() no-ops
+    // without firebaseAuth. Say what is actually wrong instead.
+    if (!firebaseAuth) {
+      showToast('AI audits are unavailable — sign-in is not configured');
+      return true;
+    }
+    showToast('Please sign in again');
+    openAuthModal('signin');
+    return true;
+  }
+  // The address has not been verified, so the free grant was never issued and
+  // billed work is refused. Distinct from 402 on purpose: telling a brand-new
+  // user they are "out of credits" when they have never spent one is a dead end.
+  if (response.status === 403) {
+    const body = await response.json().catch(() => ({}));
+    if (body.code === 'email_unverified') {
+      accountVerified = false;
+      openVerifyWall();
+      return true;
+    }
+    return false;
+  }
+  if (response.status === 402) {
+    const body = await response.json().catch(() => ({}));
+    creditBalance = typeof body.balance === 'number' ? body.balance : 0;
+    updateCreditUI();
+    openCreditWall();
+    return true;
+  }
+  return false;
+}
+
+/** Show the verify-your-email wall. in: none  out: void (DOM mutation) */
+function openVerifyWall() {
+  const modal = document.getElementById('verifyModal');
+  if (!modal) return;
+  const target = document.getElementById('verifyEmailTarget');
+  if (target) target.textContent = (currentAuthUser && currentAuthUser.email) || 'your address';
+  const note = document.getElementById('verifyNote');
+  if (note) { note.textContent = ''; note.className = 'auth-switch'; }
+  modal.classList.remove('hidden');
+}
+
+/** Hide the verify-your-email wall. in: none  out: void (DOM mutation) */
+function closeVerifyWall() {
+  const modal = document.getElementById('verifyModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/**
+ * Re-send the Firebase verification email for the signed-in user.
+ * in: none  out: Promise<void> (side effects: network, updates the modal note)
+ */
+async function resendVerification() {
+  const note = document.getElementById('verifyNote');
+  if (!currentAuthUser) return;
+  try {
+    await currentAuthUser.sendEmailVerification();
+    if (note) { note.textContent = 'Sent. Check your inbox (and spam).'; note.className = 'auth-switch auth-ok'; }
+  } catch (err) {
+    // Firebase rate-limits resends; say so rather than showing a raw code.
+    if (note) {
+      note.textContent = (err && err.code === 'auth/too-many-requests')
+        ? 'Too many requests — wait a minute and try again.'
+        : 'Could not send right now. Try again shortly.';
+      note.className = 'auth-switch auth-err';
+    }
+  }
+}
+
+/**
+ * Handle the "I've verified" button: refresh the session and, when the server
+ * agrees, close the wall and report the newly-granted credits.
+ * in: none  out: Promise<void> (side effects: network, DOM, toast)
+ */
+async function confirmVerification() {
+  const note = document.getElementById('verifyNote');
+  if (note) { note.textContent = 'Checking…'; note.className = 'auth-switch'; }
+  if (await recheckVerification()) {
+    closeVerifyWall();
+    showToast(creditBalance ? `Verified — ${creditBalance} credits added` : 'Email verified');
+    return;
+  }
+  if (note) {
+    note.textContent = 'Still unverified. Click the link in the email, then try again.';
+    note.className = 'auth-switch auth-err';
+  }
+}
+
+/** Show the out-of-credits wall. in: none  out: void (DOM mutation) */
+function openCreditWall() {
+  const modal = document.getElementById('creditModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+/** Hide the out-of-credits wall. in: none  out: void (DOM mutation) */
+function closeCreditWall() {
+  const modal = document.getElementById('creditModal');
+  if (modal) modal.classList.add('hidden');
+}
 
 // ══════════════════════════════════════════════
 //  SAVE / LOAD AUDITS
@@ -2784,8 +3514,11 @@ function loadAudit(id) {
     lastAnalysisData = audit.analysisData;
     renderAuditReport(audit.analysisData);
   }
-  // Restore auxiliary lookups (candidates only) so the Full Report + PDF reproduce them
-  lastElectabilityData = audit.electabilityData || null;
+  // Restore auxiliary lookups (candidates only) so the Full Report + PDF reproduce them.
+  // Electability goes through its renderer rather than just setting the cache:
+  // assigning the variable alone left the Results card hidden while the Full
+  // Report and the PDF both showed the data — three surfaces, three answers.
+  renderElectabilityResult(audit.electabilityData || null);
   lastScrubberData = audit.scrubberData || null;
   if (lastScrubberData) {
     renderScrubberResults(lastScrubberData);
@@ -3158,6 +3891,32 @@ function exportPDF() {
   const GREEN = [42,157,92], RED = [192,57,43], GOLD = [139,105,20];
   const d = lastAnalysisData;
 
+  // Community Assessment notes. These are captured by getJustifications(),
+  // persisted on the audit object, and shown in the Community tab — but were
+  // never exported, so a PDF of a community-adjusted audit showed the adjusted
+  // number with no record of the reasoning behind it.
+  const justs = getJustifications();
+  const justLabels = {
+    root: 'The Root (Values)',
+    branch: 'The Branches (Advocacy)',
+    fruit: 'The Fruit (Outcomes)',
+    vis: 'The Light (Visibility)',
+    toxic: 'Toxic Soil (Penalties)',
+    peoples: "People's Choice"
+  };
+  const justEntries = Object.keys(justLabels).filter(k => justs[k]);
+  if (justEntries.length) {
+    sectionHeading('COMMUNITY ASSESSMENT NOTES');
+    justEntries.forEach(k => {
+      ensure(10);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(139,105,20);
+      doc.text(justLabels[k], margin, y); y += 5;
+      paragraph(justs[k], 9, [70,70,70], 6);
+      y += 3;
+    });
+    y += 2;
+  }
+
   if (d?.summary) {
     sectionHeading('EXECUTIVE SUMMARY');
     paragraph(d.summary); y += 4;
@@ -3375,11 +4134,116 @@ toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getEleme
 //  via Resend and persists the lead to Firestore. The notification address,
 //  sender, and auto-reply copy all live server-side in backend/server.js.
 
+/**
+ * Decide what the splash shows on load. The account card comes first, ahead of
+ * the "Before You Begin" onboarding; it is skipped when auth is unavailable or
+ * the visitor is already signed in (onAuthStateChanged calls back in for the
+ * restored-session case, which resolves after this runs).
+ * in: none  out: void (DOM mutation)
+ */
 function initSplash() {
   const registered = sessionStorage.getItem('rfRegistered');
   if (registered) {
     document.getElementById('splashOverlay').classList.add('hidden');
+    return;
   }
+  const authAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase && window.__RF_CONFIG__.firebase.apiKey);
+  if (authAvailable && !currentAuthUser) {
+    document.getElementById('splashAuthWrap').style.display = 'flex';
+    document.getElementById('splashOnboardWrap').style.display = 'none';
+    document.getElementById('splashStepLabel').textContent = 'Account';
+  }
+}
+
+/**
+ * Open the shared auth modal from the splash. The splash overlay sits above the
+ * modal's normal stacking order, so the modal is lifted for the duration.
+ * in: panel (string) — 'signin' | 'register'  out: void (DOM mutation)
+ */
+function splashOpenAuth(panel) {
+  const modal = document.getElementById('authModal');
+  if (modal) modal.style.zIndex = '2100';
+  openAuthModal(panel);
+}
+
+/**
+ * Leave the account card and start the "Before You Begin" flow.
+ * in: none  out: void (DOM mutation)
+ */
+function splashSkipAuth() {
+  document.getElementById('splashAuthWrap').style.display = 'none';
+  document.getElementById('splashOnboardWrap').style.display = 'flex';
+  document.getElementById('splashStepLabel').textContent =
+    `Step ${splashStep + 1} of ${SPLASH_STEPS.length} — Before You Begin`;
+  const body = document.querySelector('.splash-body');
+  if (body) body.scrollTop = 0;
+}
+
+/**
+ * Called when auth state resolves. If the splash is still on the account card,
+ * a signed-in user is moved straight into the onboarding flow.
+ * in: none  out: void (DOM mutation)
+ */
+function splashOnAuthChange() {
+  const wrap = document.getElementById('splashAuthWrap');
+  if (!wrap) return;
+  // Advance the splash *behind* the modal rather than closing it here —
+  // authRegister() shows a "verify your email" notice on a timer and
+  // authLogin() closes on its own; force-closing would cut the notice short.
+  if (currentAuthUser && wrap.style.display !== 'none') splashSkipAuth();
+}
+
+/**
+ * Finish the onboarding flow. Signed-in users skip the separate lead-capture
+ * form entirely — authRegister() already sent their details to /api/register —
+ * so only anonymous visitors are asked to fill it in.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function splashFinish() {
+  if (currentAuthUser) {
+    sessionStorage.setItem('rfRegistered', 'true');
+    document.getElementById('splashOverlay').classList.add('hidden');
+    return;
+  }
+  goToRegistration();
+}
+
+/**
+ * Return the splash to its first-run state, showing the account card, and
+ * re-open it. Used on sign-out so the customer lands back on the
+ * login/registration screen rather than an anonymous-looking tool.
+ * Resets the onboarding step, the agreement checkbox, and the lead form so a
+ * later visitor does not resume mid-flow from the previous session.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function resetSplashToAccount() {
+  // Cleared so initSplash() re-shows the splash on the next load too, instead
+  // of treating this browser as already-registered.
+  sessionStorage.removeItem('rfRegistered');
+
+  // Rewind the onboarding carousel to step 1.
+  SPLASH_STEPS.forEach((id) => document.getElementById(id)?.classList.remove('active'));
+  splashStep = 0;
+  document.getElementById(SPLASH_STEPS[0])?.classList.add('active');
+
+  // Re-arm the agreement gate.
+  const cb = document.getElementById('agreeCB');
+  const row = document.getElementById('agreeRow');
+  const nextBtn = document.getElementById('btnStep1Next');
+  if (cb) cb.checked = false;
+  if (row) row.classList.remove('checked');
+  if (nextBtn) nextBtn.disabled = true;
+
+  // Account card front and centre; lead form and onboarding put away.
+  const step2 = document.getElementById('splashStep2');
+  if (step2) step2.style.display = 'none';
+  document.getElementById('splashOnboardWrap').style.display = 'none';
+  document.getElementById('splashAuthWrap').style.display = 'flex';
+  document.getElementById('splashStepLabel').textContent = 'Account';
+
+  document.getElementById('splashOverlay').classList.remove('hidden');
+  const body = document.querySelector('.splash-body');
+  if (body) body.scrollTop = 0;
 }
 
 function toggleAgree() {
@@ -3831,10 +4695,13 @@ async function runLegislativeScrubber(target) {
     // LLM proxy. The backend fixes max_tokens/max_uses for this task.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ task: 'scrubber', name })
     });
+    // The Scrubber is billed (opt-in), so it can come back 401/402.
+    if (!response.ok && await handleBilledRefusal(response)) return;
     if (!response.ok) throw new Error('API Error ' + response.status);
+    noteBalanceFromResponse(response);
     const data = await response.json();
     renderScrubberResults(extractJSON(messageText(data)));
   } catch(err) {
@@ -3891,9 +4758,17 @@ async function runElectabilityScore() {
     // longer summary + several polls don't truncate the JSON) and max_uses.
     const response = await fetch(backendUrl + '/api/search', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ task: 'electability', name })
     });
+    // Electability costs no credits, but it still needs a signed-in caller.
+    // The spinner is hidden here because this function's `finally` only re-enables
+    // the button — an early return would otherwise leave it spinning forever.
+    if (!response.ok && await handleBilledRefusal(response)) {
+      document.getElementById('electabilityLoading').style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
     if (!response.ok) throw new Error('API Error ' + response.status);
     const data = await response.json();
     renderElectabilityResult(extractJSON(messageText(data)));
@@ -3913,12 +4788,59 @@ async function runElectabilityScore() {
  * @param {object} data  parsed electability JSON {score, tier, context, polls[], trend}
  * @returns {void}  mutates the Results-tab DOM, the Full Report DOM, and lastElectabilityData
  */
+/**
+ * Normalize cached Electability data into the values every surface renders.
+ * Single source of truth for the score clamp, the color ramp, and the trend
+ * suffix, so the Results card, the Full Report copy, and the PDF cannot drift.
+ * @param {object} data  the Electability payload (score, tier, trend, …)
+ * @returns {{score: number, color: string, trend: string}}  clamped score,
+ *          CSS color variable, and the human trend suffix ('' when unknown)
+ */
+function electabilityView(data) {
+  const score = Math.min(10, Math.max(0, data?.score || 0));
+  return {
+    score,
+    color: score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)',
+    trend: data?.trend === 'rising' ? ' (rising)' : data?.trend === 'falling' ? ' (falling)'
+      : data?.trend === 'stable' ? ' (stable)' : ''
+  };
+}
+
+/**
+ * Build the poll rows shared by the Results card and the Full Report copy.
+ * Previously duplicated in both renderers, which is exactly how they drift.
+ * @param {Array} polls  poll entries ({source, result, date})
+ * @param {string} color CSS color for the bars and percentages
+ * @returns {string}     HTML for the poll list ('' when there are no polls)
+ */
+function electabilityPollsHtml(polls, color) {
+  return (polls || []).map(p => {
+    const pct = parseFloat(p.result) || 0;
+    return `<div class="poll-item">
+      <span class="poll-name">${escapeHtml(p.source)}</span>
+      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100, pct * 2)}%;background:${color};"></div></div>
+      <span class="poll-pct" style="color:${color};">${escapeHtml(p.result)}</span>
+      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
+    </div>`;
+  }).join('');
+}
+
 function renderElectabilityResult(data) {
-  lastElectabilityData = data;   // cache so the Full Report tab + PDF can reproduce it
+  lastElectabilityData = data || null;   // cache so the Full Report tab + PDF can reproduce it
   renderReportElectability();
-  const score = Math.min(10, Math.max(0, data.score || 0));
-  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
-  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
+
+  // Nothing cached (e.g. a policy audit, or a saved audit with no lookup) —
+  // hide the card rather than leaving a stale one from the previous subject.
+  const card = document.getElementById('electabilityCard');
+  if (!lastElectabilityData) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+  // Shown here as well as in runElectabilityScore(), so restoring a saved audit
+  // brings the Results card back and all three surfaces agree.
+  if (card) card.style.display = 'block';
+
+  const { score, color: electColor, trend: trendIcon } = electabilityView(data);
 
   document.getElementById('electScoreNum').textContent = score;
   document.getElementById('electScoreNum').style.color = electColor;
@@ -3931,17 +4853,7 @@ function renderElectabilityResult(data) {
   ctxEl.textContent = data.context || '';
   ctxEl.style.display = data.context ? 'block' : 'none';
 
-  let pollHtml = '';
-  (data.polls || []).forEach(p => {
-    const pct = parseFloat(p.result) || 0;
-    pollHtml += `<div class="poll-item">
-      <span class="poll-name">${escapeHtml(p.source)}</span>
-      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
-      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
-      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
-    </div>`;
-  });
-  document.getElementById('electPollItems').innerHTML = pollHtml;
+  document.getElementById('electPollItems').innerHTML = electabilityPollsHtml(data.polls, electColor);
 
   document.getElementById('electabilityLoading').style.display = 'none';
   document.getElementById('electabilityResult').style.display = 'flex';
@@ -3959,20 +4871,8 @@ function renderReportElectability() {
   const data = lastElectabilityData;
   if (!data) { section.style.display = 'none'; content.innerHTML = ''; return; }
 
-  const score = Math.min(10, Math.max(0, data.score || 0));
-  const electColor = score >= 7 ? 'var(--green)' : score >= 5 ? 'var(--blue)' : score >= 3 ? 'var(--gold)' : 'var(--red)';
-  const trendIcon = data.trend === 'rising' ? ' (rising)' : data.trend === 'falling' ? ' (falling)' : data.trend === 'stable' ? ' (stable)' : '';
-
-  let pollHtml = '';
-  (data.polls || []).forEach(p => {
-    const pct = parseFloat(p.result) || 0;
-    pollHtml += `<div class="poll-item">
-      <span class="poll-name">${escapeHtml(p.source)}</span>
-      <div class="poll-bar-wrap"><div class="poll-bar-fill" style="width:${Math.min(100,pct*2)}%;background:${electColor};"></div></div>
-      <span class="poll-pct" style="color:${electColor};">${escapeHtml(p.result)}</span>
-      <span style="font-size:10px;color:var(--text-dimmer);margin-left:6px;">${escapeHtml(p.date || '')}</span>
-    </div>`;
-  });
+  const { score, color: electColor, trend: trendIcon } = electabilityView(data);
+  const pollHtml = electabilityPollsHtml(data.polls, electColor);
 
   content.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
@@ -4024,6 +4924,7 @@ function showView(v) {
 // ══════════════════════════════════════════════
 //  UPDATED INIT — splash gates first-run onboarding + registration
 // ══════════════════════════════════════════════
+initFirebaseAuth();    // wire Firebase auth (no-op if no config injected)
 renderSavedList();
 loadFromURL();
 calculate();

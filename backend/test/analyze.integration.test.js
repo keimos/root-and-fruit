@@ -7,14 +7,19 @@
  *   - assembles the prompt SERVER-SIDE from structured fields (injection fix #1)
  *   - IGNORES any client-supplied system/messages (the hole is actually closed)
  *   - rejects a missing name
+ *   - requires a signed-in user and debits exactly one credit per audit
  * Plus pure unit tests for validateAudit / parseAuditFromMessage (fix #3b).
+ *
+ * Auth and credits are faked (app.__setAuthVerifier / app.__setCredits) so the
+ * route can be driven without a Firebase project or Firestore.
  */
 
-const { test, before, after } = require('node:test');
+const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const app = require('../server');
 const prompts = require('../lib/prompts');
+const { creditCost, InsufficientCreditsError } = require('../lib/credits');
 
 // A schema-valid audit the mock returns as the model's output.
 const VALID_AUDIT = {
@@ -34,25 +39,60 @@ const FAKE_MESSAGE = {
 };
 
 let server, base, captured;
+// Every debit attempt, so the one-credit-per-audit rule can be asserted directly.
+let charges = [];
 
-before(async () => {
+// In-memory stand-in for lib/credits, using the real cost table and error type
+// so the fake cannot drift from the rules the route actually enforces.
+const fakeCredits = {
+  balance: 5,
+  async debit(uid, { kind, ref } = {}) {
+    const cost = creditCost(kind);
+    charges.push({ uid, kind, ref, cost });
+    if (cost === 0) return { charged: 0, cycleDelta: 0, packDelta: 0, entryId: null, balanceAfter: null };
+    if (fakeCredits.balance < cost) throw new InsufficientCreditsError(fakeCredits.balance, cost);
+    fakeCredits.balance -= cost;
+    return { charged: cost, cycleDelta: 0, packDelta: -cost, entryId: 'entry-1', balanceAfter: fakeCredits.balance };
+  },
+  async refund(uid, charge) {
+    if (charge?.charged) fakeCredits.balance += charge.charged;
+    return null;
+  },
+};
+
+/** Restore the happy-path Anthropic mock (also used to undo a per-test failure mock). */
+function mockAnthropicOk() {
   app.__setAnthropic({
     messages: {
       stream: (args) => { captured = args; return { finalMessage: async () => FAKE_MESSAGE }; },
     },
   });
+}
+
+before(async () => {
+  mockAnthropicOk();
+  app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  app.__setCredits(fakeCredits);
   await new Promise((resolve) => {
     server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; resolve(); });
   });
 });
 
+beforeEach(() => { charges = []; fakeCredits.balance = 5; });
+
 after(async () => {
   app.__setAnthropic(null); // restore the no-key state for any later use
+  app.__setAuthVerifier(null);
+  app.__setCredits(null);
   await new Promise((resolve) => server.close(resolve));
 });
 
-const post = (path, body) =>
-  fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const post = (path, body, headers = {}) =>
+  fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good', ...headers },
+    body: JSON.stringify(body),
+  });
 
 // ── handler assembles server-side ──────────────────────
 test('/api/analyze assembles the locked prompt server-side from structured fields', async () => {
@@ -86,6 +126,72 @@ test('/api/analyze IGNORES client-supplied system/messages (injection closed)', 
   assert.equal(captured.system[0].text, prompts.ANALYZE_SYSTEM);
   assert.ok(captured.messages[0].content.includes('Integrity Index Auditor'));
   assert.ok(!captured.messages[0].content.includes('jailbreak payload'));
+});
+
+// ── auth + credits ─────────────────────────────────────
+test('/api/analyze requires a signed-in user (401 without a token)', async () => {
+  const res = await fetch(`${base}/api/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Ada', subjectType: 'candidate' }),
+  });
+  assert.equal(res.status, 401);
+  assert.equal(charges.length, 0, 'no debit attempted for an anonymous caller');
+});
+
+test('/api/analyze debits exactly one credit and reports the new balance', async () => {
+  const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(charges.map((c) => [c.kind, c.cost]), [['analyze', 1]]);
+  assert.equal(charges[0].ref, 'Ada', 'the subject is recorded on the ledger row');
+  assert.equal(fakeCredits.balance, 4);
+  assert.equal(res.headers.get('x-credit-balance'), '4');
+});
+
+// An unverified account is free to mint, so letting one spend would make the
+// credit quota unenforceable — refuse before the debit, not after.
+test('/api/analyze refuses an unverified address with 403 and no debit', async () => {
+  app.__setAuthVerifier(async () => ({ uid: 'u-new', email: 'a@b.com', email_verified: false }));
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.code, 'email_unverified');
+    assert.equal(charges.length, 0, 'no debit attempted');
+    assert.equal(fakeCredits.balance, 5, 'balance untouched');
+  } finally {
+    app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  }
+});
+
+test('/api/analyze returns 402 with the balance when credits run out', async () => {
+  fakeCredits.balance = 0;
+  const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+  assert.equal(res.status, 402);
+  const body = await res.json();
+  assert.match(body.error, /insufficient credits/i);
+  assert.equal(body.balance, 0);
+  assert.equal(body.required, 1);
+});
+
+test('/api/analyze does not debit when the request fails validation', async () => {
+  const res = await post('/api/analyze', { subjectType: 'candidate' });
+  assert.equal(res.status, 400);
+  assert.equal(charges.length, 0);
+  assert.equal(fakeCredits.balance, 5);
+});
+
+test('/api/analyze refunds the credit when the Anthropic call fails', async () => {
+  app.__setAnthropic({
+    messages: { stream: () => ({ finalMessage: async () => { const e = new Error('boom'); e.status = 400; throw e; } }) },
+  });
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+    assert.equal(res.status, 400);
+    assert.equal(fakeCredits.balance, 5, 'credit returned — the audit never happened');
+  } finally {
+    mockAnthropicOk();
+  }
 });
 
 // ── #3b: validateAudit / parseAuditFromMessage ─────────

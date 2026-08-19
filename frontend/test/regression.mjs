@@ -18,6 +18,10 @@
 //                    rendered and prints the actual one (baseline-establishing
 //                    mode — see the CLAUDE.md "pending regression test" note).
 //   SUBJECT          optional — override the subject (default "Billion Godson")
+//   REGRESSION_USER_EMAIL    required — account the harness signs in as
+//   REGRESSION_USER_PASSWORD required — its password. Auto-Analyze is a billed,
+//                    signed-in-only route; the account must also hold credits
+//                    (the free grant covers 5 runs, so top it up in Firestore).
 //   AUDIT_TIMEOUT_MS optional — max wait for the audit (default 240000)
 // out: exit code 0 on pass, 1 on failure (with a diagnostic on stderr).
 
@@ -26,6 +30,9 @@ import { chromium } from 'playwright';
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const EXPECTED_VERDICT = (process.env.EXPECTED_VERDICT || '').trim();
 const SUBJECT = (process.env.SUBJECT || 'Billion Godson').trim();
+// Auto-Analyze is billed and signed-in only, so the harness needs an account.
+const REGRESSION_EMAIL = (process.env.REGRESSION_USER_EMAIL || '').trim();
+const REGRESSION_PASSWORD = process.env.REGRESSION_USER_PASSWORD || '';
 const AUDIT_TIMEOUT_MS = Number(process.env.AUDIT_TIMEOUT_MS || 240000);
 
 // fail MSG — print a diagnostic and exit non-zero.
@@ -37,6 +44,45 @@ function fail(msg) {
 }
 
 if (!FRONTEND_URL) fail('FRONTEND_URL env var is required');
+
+// signIn PAGE — authenticate the harness through the app's own sign-in modal.
+// Auto-Analyze is billed and requires a verified account; the regression account
+// must therefore exist in the environment's Firebase project AND hold credits
+// (the 5-credit free grant covers only five runs — top it up in Firestore).
+// in:  page (playwright.Page) — the loaded app
+// out: Promise<void>; exits the process with a diagnostic if sign-in is
+//      unconfigured or fails
+async function signIn(page) {
+  if (!REGRESSION_EMAIL || !REGRESSION_PASSWORD) {
+    fail('REGRESSION_USER_EMAIL and REGRESSION_USER_PASSWORD are required — '
+      + 'Auto-Analyze is a billed route and no longer runs anonymously');
+  }
+  console.log(`→ Signing in as ${REGRESSION_EMAIL}`);
+  await page.evaluate(() => openAuthModal('signin'));
+  await page.fill('#siEmail', REGRESSION_EMAIL);
+  await page.fill('#siPassword', REGRESSION_PASSWORD);
+  await page.click('#siSubmit');
+
+  // The header swaps the Sign In button for the account block once Firebase
+  // resolves the session.
+  try {
+    await page.waitForFunction(
+      () => {
+        const acct = document.getElementById('authAccount');
+        return acct && acct.style.display !== 'none';
+      },
+      null,
+      { timeout: 30000, polling: 500 }
+    );
+  } catch {
+    const authErr = await page.evaluate(() => {
+      const el = document.getElementById('authError');
+      return el && el.textContent.trim();
+    });
+    fail(`sign-in did not complete${authErr ? ` — ${authErr}` : ''}`);
+  }
+  console.log('✓ Signed in');
+}
 
 // run — execute the regression against the deployed dev frontend.
 // in:  none (reads module-level config)
@@ -60,6 +106,12 @@ async function run() {
       try { sessionStorage.setItem('rfRegistered', '1'); } catch (e) { /* ignore */ }
       document.getElementById('splashOverlay')?.classList.add('hidden');
     });
+
+    // Auto-Analyze is a billed route and now requires a signed-in account, so
+    // the harness must authenticate before it can run. Without this the click
+    // silently opens the sign-in modal and the audit never starts, which would
+    // surface only as an opaque timeout.
+    await signIn(page);
 
     // Results view is the default; the subject input + Auto-Analyze live there.
     await page.fill('#nameInput', SUBJECT);

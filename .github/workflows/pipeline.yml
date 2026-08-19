@@ -20,7 +20,10 @@ name: CI/CD Pipeline
 # GitHub. Config comes from repo VARIABLES (Settings → Secrets and variables →
 # Actions → Variables): GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER,
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
-# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN).
+# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN, FREE_CREDITS, and — to enable Firebase
+# auth — FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID,
+# FIREBASE_APP_ID [+ optional FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_SENDER_ID].
+# Any FIREBASE_* var absent → auth stays off and the frontend is fully anonymous.
 
 # Branch → dev, main → prod:
 #
@@ -226,6 +229,7 @@ jobs:
   # silently. This boots frontend/server.js and drives every nav tab in headless
   # Chromium — catching uncaught errors, missing runtime-config injection, and
   # nav/tabs-array drift (the dead-showView hazard). See frontend/test/smoke.mjs.
+  # Also runs frontend/test/splash.mjs, which covers the first-run splash order.
   frontend-smoke:
     name: Frontend smoke test
     runs-on: ubuntu-latest
@@ -253,6 +257,18 @@ jobs:
       - name: Run smoke test
         working-directory: frontend
         run: node test/smoke.mjs
+      # Asserts the first-run ordering: account card → "Before You Begin" →
+      # onboarding, skippable, and no lead form for signed-in users. Needs no
+      # Firebase project — a dummy key is enough to enable the UI.
+      - name: Run splash sequence test
+        working-directory: frontend
+        run: node test/splash.mjs
+      # Guards report/PDF consistency: a saved audit must render the same
+      # Electability data on the Results tab, the Full Report, and in the PDF,
+      # and the PDF must carry the Community Assessment justifications.
+      - name: Run report consistency test
+        working-directory: frontend
+        run: node test/report.mjs
 
   # ── Build once: push SHA-tagged images to the shared registry ───────────
   # Runs on a push to any non-main branch (after the gates). Builds both images
@@ -418,7 +434,7 @@ jobs:
             --max-instances 10 \
             --timeout 600 \
             --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}"
 
       # Read the backend's public URL back so the frontend deploy can inject
       # it as BACKEND_URL — this ordering is the hard constraint that prevents
@@ -449,7 +465,7 @@ jobs:
             --allow-unauthenticated \
             --memory 256Mi \
             --max-instances 5 \
-            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}${{ vars.FIREBASE_API_KEY && format(',FIREBASE_API_KEY={0}', vars.FIREBASE_API_KEY) || '' }}${{ vars.FIREBASE_AUTH_DOMAIN && format(',FIREBASE_AUTH_DOMAIN={0}', vars.FIREBASE_AUTH_DOMAIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FIREBASE_APP_ID && format(',FIREBASE_APP_ID={0}', vars.FIREBASE_APP_ID) || '' }}${{ vars.FIREBASE_STORAGE_BUCKET && format(',FIREBASE_STORAGE_BUCKET={0}', vars.FIREBASE_STORAGE_BUCKET) || '' }}${{ vars.FIREBASE_MESSAGING_SENDER_ID && format(',FIREBASE_MESSAGING_SENDER_ID={0}', vars.FIREBASE_MESSAGING_SENDER_ID) || '' }}"
           URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${{ vars.GCP_REGION }}" \
@@ -590,7 +606,7 @@ jobs:
             --max-instances 10 \
             --timeout 600 \
             --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}"
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}"
 
       - name: Capture backend URL
         id: backend
@@ -614,7 +630,7 @@ jobs:
             --allow-unauthenticated \
             --memory 256Mi \
             --max-instances 5 \
-            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}"
+            --set-env-vars "NODE_ENV=production,BACKEND_URL=${{ steps.backend.outputs.url }},APP_VERSION=${{ github.sha }}${{ vars.FIREBASE_API_KEY && format(',FIREBASE_API_KEY={0}', vars.FIREBASE_API_KEY) || '' }}${{ vars.FIREBASE_AUTH_DOMAIN && format(',FIREBASE_AUTH_DOMAIN={0}', vars.FIREBASE_AUTH_DOMAIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FIREBASE_APP_ID && format(',FIREBASE_APP_ID={0}', vars.FIREBASE_APP_ID) || '' }}${{ vars.FIREBASE_STORAGE_BUCKET && format(',FIREBASE_STORAGE_BUCKET={0}', vars.FIREBASE_STORAGE_BUCKET) || '' }}${{ vars.FIREBASE_MESSAGING_SENDER_ID && format(',FIREBASE_MESSAGING_SENDER_ID={0}', vars.FIREBASE_MESSAGING_SENDER_ID) || '' }}"
           URL=$(gcloud run services describe "$FRONTEND_SERVICE" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${{ vars.GCP_REGION }}" \
@@ -708,6 +724,11 @@ jobs:
         env:
           FRONTEND_URL: ${{ steps.dev.outputs.url }}
           EXPECTED_VERDICT: ${{ vars.EXPECTED_VERDICT }}
+          # Auto-Analyze is a billed, signed-in-only route, so the harness needs
+          # a dev-project account. Keep it topped up with credits in Firestore —
+          # the 5-credit free grant covers only five regression runs.
+          REGRESSION_USER_EMAIL: ${{ vars.REGRESSION_USER_EMAIL }}
+          REGRESSION_USER_PASSWORD: ${{ secrets.REGRESSION_USER_PASSWORD }}
         run: node test/regression.mjs
 
   # ── Rollback: manual only (workflow_dispatch) ────────────────────────────
