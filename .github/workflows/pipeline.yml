@@ -20,7 +20,8 @@ name: CI/CD Pipeline
 # GitHub. Config comes from repo VARIABLES (Settings → Secrets and variables →
 # Actions → Variables): GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER,
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
-# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN, FREE_CREDITS, and — to enable Firebase
+# REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN, FREE_CREDITS, APP_URL,
+# MAX_CREDIT_GRANT, and — to enable Firebase
 # auth — FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID,
 # FIREBASE_APP_ID [+ optional FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_SENDER_ID].
 # Any FIREBASE_* var absent → auth stays off and the frontend is fully anonymous.
@@ -433,8 +434,8 @@ jobs:
             --memory 600Mi \
             --max-instances 10 \
             --timeout 600 \
-            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}"
+            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest" \
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}${{ vars.APP_URL && format(',APP_URL={0}', vars.APP_URL) || '' }}${{ vars.MAX_CREDIT_GRANT && format(',MAX_CREDIT_GRANT={0}', vars.MAX_CREDIT_GRANT) || '' }}"
 
       # Read the backend's public URL back so the frontend deploy can inject
       # it as BACKEND_URL — this ordering is the hard constraint that prevents
@@ -605,8 +606,8 @@ jobs:
             --memory 600Mi \
             --max-instances 10 \
             --timeout 600 \
-            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest" \
-            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}"
+            --set-secrets "ANTHROPIC_API_KEY=anthropic-api-key:latest,RESEND_API_KEY=resend-api-key:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest" \
+            --set-env-vars "NODE_ENV=production${{ vars.ANTHROPIC_MODEL && format(',ANTHROPIC_MODEL={0}', vars.ANTHROPIC_MODEL) || '' }}${{ vars.REGISTRATION_EMAIL && format(',REGISTRATION_EMAIL={0}', vars.REGISTRATION_EMAIL) || '' }}${{ vars.REGISTRATION_FROM && format(',REGISTRATION_FROM={0}', vars.REGISTRATION_FROM) || '' }}${{ vars.DONATION_URL && format(',DONATION_URL={0}', vars.DONATION_URL) || '' }}${{ vars.ALLOWED_ORIGIN && format(',ALLOWED_ORIGIN={0}', vars.ALLOWED_ORIGIN) || '' }}${{ vars.FIREBASE_PROJECT_ID && format(',FIREBASE_PROJECT_ID={0}', vars.FIREBASE_PROJECT_ID) || '' }}${{ vars.FREE_CREDITS && format(',FREE_CREDITS={0}', vars.FREE_CREDITS) || '' }}${{ vars.APP_URL && format(',APP_URL={0}', vars.APP_URL) || '' }}${{ vars.MAX_CREDIT_GRANT && format(',MAX_CREDIT_GRANT={0}', vars.MAX_CREDIT_GRANT) || '' }}"
 
       - name: Capture backend URL
         id: backend

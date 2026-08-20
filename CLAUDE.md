@@ -244,7 +244,11 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Electability Rating (`task: 'electability'`) | **Free** — it runs automatically for candidates, so a charge would be a surprise |
 | Free, no account | Manual scoring, saved audits, compare, share links |
 
-**Two buckets, not one balance.** `cycleBalance` holds subscription credits (expire each cycle); `packBalance` holds purchased packs and the free grant (never expire). Debits spend `cycleBalance` **first**, and `refund()` returns credits to the exact bucket they came from so a refunded expiring credit never silently becomes a permanent one.
+**Two buckets, not one balance.** `cycleBalance` holds subscription credits; `packBalance` holds purchased packs and the free grant. **Neither expires** — subscription credits roll over and accumulate, capped at `ROLLOVER_MULTIPLIER` (3) × the plan's monthly allowance, so the promise "you don't lose what you paid for" holds without an unbounded liability. Debits spend `cycleBalance` **first** (no longer load-bearing without expiry, but it preserves refund symmetry), and `refund()` returns credits to the exact bucket they came from.
+
+Because subscription credits are permanent, **cancelling a subscription must never zero a balance** — the user paid for those credits. Subscription webhook events update `plan` / `subscriptionStatus` only.
+
+**Purchases are idempotent per Stripe event.** `addCredits()` reads and writes `stripe_events/{event.id}` inside the same transaction as the balance change, so an at-least-once redelivery (a slow response, a cold start) cannot credit twice. Purchased credits accumulate in `lifetimePurchased`, deliberately **not** `lifetimeGranted` — `grantIssued()` reads the latter as "the free grant was already paid out", so folding purchases in would rob a buyer of a free grant they had not yet received.
 
 **Reserve-then-refund, not charge-on-success.** The debit happens *before* the Anthropic call and is reversed if it throws. Charging after success would let concurrent requests all pass the same balance check and overspend. The tradeoff — a crash between debit and refund costs one credit — is recoverable via the `credit_ledger` row, which carries the subject as `ref`.
 
