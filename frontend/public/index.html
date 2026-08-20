@@ -1348,7 +1348,6 @@
       <div class="header-actions">
         <button class="btn-ghost" onclick="showOnboarding()"><i class="fa-solid fa-circle-question"></i> <span class="hide-xs">How it Works</span></button>
         <button class="btn-ghost" onclick="showView('saved')"><i class="fa-solid fa-folder-open"></i> <span class="hide-xs">Saved</span></button>
-        <button class="btn-ghost" onclick="resetAll()">Reset</button>
         <!-- Auth: signed-out shows "Sign In"; signed-in shows email + Sign Out.
              Both hidden until Firebase auth initializes (config present). -->
         <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
@@ -4366,6 +4365,9 @@ function setLoading(on) {
     : '<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Analyze';
 }
 
+// NOTE: currently unreferenced — the header "Reset" button was removed. Kept so
+// the capability can be re-exposed (e.g. from the Results view) without being
+// rewritten; delete it if the product decision is that clearing is not offered.
 function resetAll() {
   rootCBs.forEach(c => c.checked = false);
   branchCBs.forEach(c => c.checked = false);
