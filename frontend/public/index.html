@@ -3255,6 +3255,9 @@ let creditBalance = null;   // number when known, null when unknown / signed out
 // free grant is withheld until it is true, so this is what separates "you spent
 // your credits" from "verify your address to receive them".
 let accountVerified = false;
+// True when the last /api/account call errored. Kept distinct from "no balance"
+// so the pill can show a retry state instead of vanishing.
+let accountLoadFailed = false;
 
 /**
  * Build request headers for a billed API call, attaching the Firebase ID token.
@@ -3272,7 +3275,7 @@ async function apiHeaders(base = {}) {
  *     signed out / unreachable (side effects: network, DOM)
  */
 async function refreshAccount() {
-  if (!currentAuthUser) { creditBalance = null; accountVerified = false; updateCreditUI(); return null; }
+  if (!currentAuthUser) { creditBalance = null; accountVerified = false; accountLoadFailed = false; updateCreditUI(); return null; }
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
     const res = await fetch(backendUrl + '/api/account', { headers: await apiHeaders() });
@@ -3281,11 +3284,16 @@ async function refreshAccount() {
     creditBalance = data.account ? data.account.balance : null;
     accountVerified = !!(data.account && data.account.emailVerified);
     hasBillingHistory = !!(data.account && data.account.hasBilling);
+    accountLoadFailed = false;
     updateCreditUI();
     return data.account || null;
   } catch (err) {
+    // Do NOT fail silently. Hiding the pill on error is indistinguishable from
+    // "signed out", which leaves a signed-in user staring at a header that
+    // simply has no balance in it and no way to ask why.
     console.error('Could not load account:', err);
     creditBalance = null;
+    accountLoadFailed = true;
     updateCreditUI();
     return null;
   }
@@ -3323,7 +3331,27 @@ function updateCreditUI() {
   const pill = document.getElementById('creditPill');
   const count = document.getElementById('creditCount');
   if (!pill || !count) return;
+  const add = document.getElementById('creditAdd');
+
+  // Signed in but the balance could not be loaded: show a retry affordance
+  // rather than nothing, so the failure is visible and recoverable in place.
+  if (creditBalance == null && currentAuthUser && accountLoadFailed) {
+    pill.style.display = '';
+    pill.classList.add('low');
+    count.textContent = '!';
+    pill.title = 'Could not load your credits — click to retry';
+    pill.setAttribute('aria-label', 'Could not load your credits — click to retry');
+    pill.onclick = async () => {
+      accountLoadFailed = false;
+      count.textContent = '…';
+      await refreshAccount();
+      if (accountLoadFailed) showToast('Still could not load your credits');
+    };
+    if (add) add.style.display = 'none';
+    return;
+  }
   if (creditBalance == null) { pill.style.display = 'none'; return; }
+  pill.classList.remove('low');
   pill.style.display = '';
   count.textContent = creditBalance;
   pill.classList.toggle('low', creditBalance <= 1);
