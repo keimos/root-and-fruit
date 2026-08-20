@@ -3368,8 +3368,7 @@ function updateCreditUI() {
     : `${creditBalance} credits remaining — add more`);
   pill.onclick = pending ? openVerifyWall : openCreditWall;
   // The "+" promises a purchase, so it must not show on the pill that opens the
-  // verification wall instead.
-  const add = document.getElementById('creditAdd');
+  // verification wall instead. (`add` is resolved at the top of this function.)
   if (add) add.style.display = pending ? 'none' : '';
 }
 
