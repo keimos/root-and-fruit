@@ -12,7 +12,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { clampInt, promptSize, LIMITS } = require('../server');
+const { clampInt, promptSize, LIMITS, parseAllowedOrigins } = require('../server');
 
 // ── clampInt ───────────────────────────────────────────
 test('clampInt: passes through a value already in range', () => {
@@ -65,4 +65,34 @@ test('LIMITS: ceilings leave headroom above the real UI values', () => {
   assert.ok(LIMITS.searchMaxTokens >= 3000);
   assert.ok(LIMITS.searchMaxUses >= 4);
   assert.ok(LIMITS.promptChars >= 20000);
+});
+
+// ── CORS origin list ───────────────────────────────────
+// One deployment answers on several origins: Cloud Run gives every service two
+// URL formats, and a custom domain adds a third. A single configured origin
+// means a browser on any other one has its preflight rejected and its real
+// request silently dropped — which shows up as OPTIONS 204 with no GET.
+test('parseAllowedOrigins: splits a comma-separated list', () => {
+  assert.deepEqual(
+    parseAllowedOrigins('https://a.example.com,https://b.example.com'),
+    ['https://a.example.com', 'https://b.example.com']
+  );
+});
+
+test('parseAllowedOrigins: trims whitespace around entries', () => {
+  assert.deepEqual(
+    parseAllowedOrigins(' https://a.example.com , https://b.example.com '),
+    ['https://a.example.com', 'https://b.example.com']
+  );
+});
+
+test('parseAllowedOrigins: unset or wildcard stays fully open', () => {
+  assert.equal(parseAllowedOrigins(undefined), '*');
+  assert.equal(parseAllowedOrigins(''), '*');
+  assert.equal(parseAllowedOrigins('*'), '*');
+  assert.equal(parseAllowedOrigins('https://a.example.com,*'), '*', 'a wildcard anywhere wins');
+});
+
+test('parseAllowedOrigins: a single origin still works', () => {
+  assert.deepEqual(parseAllowedOrigins('https://only.example.com'), ['https://only.example.com']);
 });

@@ -198,8 +198,27 @@ app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhookHandler);
 
 app.use(express.json({ limit: '2mb' }));
+/**
+ * Parse ALLOWED_ORIGIN into a value the `cors` package accepts.
+ *
+ * A LIST, not a single string, because one deployment legitimately answers on
+ * several origins: Cloud Run serves every service on two URL formats
+ * (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`),
+ * and a custom domain adds a third. With only one configured, a browser on any
+ * other one gets a preflight whose Allow-Origin does not match, silently drops
+ * the real request, and the app looks broken with nothing in the server logs
+ * but an OPTIONS 204.
+ * @param {string|undefined} raw  comma-separated origins, or '*'
+ * @returns {string|string[]}  '*' when unset or wildcarded, else the origin list
+ */
+function parseAllowedOrigins(raw) {
+  const list = String(raw || '*').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length === 0 || list.includes('*') ? '*' : list;
+}
+const ALLOWED_ORIGINS = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || '*',
+  origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   // The billed routes report the post-debit balance in a header so the UI can
@@ -842,6 +861,7 @@ module.exports.withRetry = withRetry;
 module.exports.isRetryable = isRetryable;
 module.exports.clampInt = clampInt;
 module.exports.promptSize = promptSize;
+module.exports.parseAllowedOrigins = parseAllowedOrigins;
 module.exports.LIMITS = LIMITS;
 // Test-only: inject a fake Firebase ID-token verifier so the auth middleware can
 // be exercised without a live Firebase project. Never called in prod.
