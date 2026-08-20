@@ -75,16 +75,22 @@
     position: sticky; top: 0; z-index: 100;
     padding: 0 16px;
   }
+  /* Chrome (header + nav) is wider than the 780px reading column: the signed-in
+     header carries ~950px of content — logo, three actions, the credit pill,
+     the account block and the live score — which simply does not fit 780. The
+     body stays 780 so text keeps its measure. Height stays 64px because the nav
+     below is `position: sticky; top: 64px` and would detach if this grew. */
   .header-inner {
-    max-width: 780px; margin: 0 auto;
+    max-width: 960px; margin: 0 auto;
     display: flex; align-items: center; justify-content: space-between;
-    height: 64px;
+    height: 64px; gap: 12px;
   }
-  .logo { display: flex; align-items: baseline; gap: 8px; }
+  /* The logo is the one element that may compress; the balance never is. */
+  .logo { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
   .logo-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 0.08em; color: #FFFFFF; }
   .logo-title span { color: var(--gold-bright); }
   .logo-sub { font-size: 10px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.2em; }
-  .header-score-wrap { display: flex; align-items: center; gap: 16px; }
+  .header-score-wrap { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
   #liveScore {
     font-family: 'Bebas Neue', sans-serif;
     font-size: 36px;
@@ -528,6 +534,13 @@
 
   /* ─── RESPONSIVE HELPERS ─── */
   .hide-xs { display: inline; }
+  /* Below ~1000px the row overflows again well before .hide-xs kicks in at 560,
+     so shed the least load-bearing things first: the signed-in email (Sign Out
+     stays, so the state is still legible) and the logo's subtitle. */
+  @media (max-width: 1000px) {
+    .auth-account-email { display: none; }
+    .logo-sub { display: none; }
+  }
   @media (max-width: 560px) {
     .hide-xs { display: none; }
     .header-actions .btn-ghost { padding: 6px 9px; }
@@ -592,12 +605,20 @@
   .plan-empty { font-size: 13px; color: var(--text-dim); text-align: center; padding: 18px 0; }
   .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
   .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
-  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; }
+  /* flex: 0 0 auto — the credit balance is the one header item that must never
+     be the thing that gets squeezed; it is both the status readout and the only
+     route to buying more. */
+  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; flex: 0 0 auto; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+  .credit-pill:hover { border-color: var(--gold-bright); background: rgba(139,105,20,0.24); }
+  .credit-pill:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+  /* Explicit affordance: a clickable pill alone reads as a status badge, so the
+     way to buy more has to be visible rather than discovered. */
+  .credit-add { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: rgba(232,201,106,0.22); font-size: 9px; margin-left: 1px; }
   .credit-pill.low { border-color: rgba(192,57,43,0.5); background: rgba(192,57,43,0.12); color: #e8836f; }
   /* Signed in but unconfirmed: the free grant is waiting, not spent. */
   .credit-pill.unverified { border-style: dashed; }
   .auth-account { display: flex; align-items: center; gap: 8px; }
-  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .onboard-icon { font-size: 48px; display: block; margin-bottom: 16px; text-align: center; }
@@ -1333,8 +1354,10 @@
         <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
         <!-- Credit balance. Display only — the server owns the real balance and
              re-checks it on every billed call. Hidden until an account loads. -->
-        <span class="credit-pill" id="creditPill" style="display:none;" title="Credits remaining">
+        <span class="credit-pill" id="creditPill" style="display:none;" role="button" tabindex="0"
+              title="Credits remaining" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
           <i class="fa-solid fa-seedling"></i> <span id="creditCount">0</span><span class="hide-xs"> credits</span>
+          <span class="credit-add" id="creditAdd" aria-hidden="true"><i class="fa-solid fa-plus"></i></span>
         </span>
         <span class="auth-account" id="authAccount" style="display:none;">
           <span class="auth-account-email" id="authAccountEmail"></span>
@@ -1348,7 +1371,9 @@
 
 <!-- NAV -->
 <div style="border-bottom:1px solid rgba(139,105,20,0.3); background:var(--navy); position:sticky; top:64px; z-index:99; overflow-x:auto;">
-  <div class="container" style="padding-top:8px; padding-bottom:8px;">
+  <!-- Matches .header-inner's 960px so the chrome's left edge lines up with the
+       logo above it; the reading column below stays 780px. -->
+  <div class="container" style="padding-top:8px; padding-bottom:8px; max-width:960px;">
     <div class="nav-tabs" id="navTabs" style="flex-wrap:nowrap; gap:1px;">
       <button class="nav-tab active" onclick="showView('results')">Results</button>
       <button class="nav-tab" onclick="showView('community')">Community Assessment</button>
@@ -3310,8 +3335,14 @@ function updateCreditUI() {
   // standing way to buy more, so a user with credits left is never forced to
   // run out before they can top up.
   pill.title = pending ? 'Verify your email to receive your free credits' : 'Credits remaining — click to add more';
+  pill.setAttribute('aria-label', pending
+    ? 'Verify your email to receive your free credits'
+    : `${creditBalance} credits remaining — add more`);
   pill.onclick = pending ? openVerifyWall : openCreditWall;
-  pill.style.cursor = 'pointer';
+  // The "+" promises a purchase, so it must not show on the pill that opens the
+  // verification wall instead.
+  const add = document.getElementById('creditAdd');
+  if (add) add.style.display = pending ? 'none' : '';
 }
 
 /**
