@@ -366,3 +366,78 @@ test('intentFromEvent: returns null for an event with no object', () => {
   assert.equal(intentFromEvent({ type: 'invoice.paid' }), null);
   assert.equal(intentFromEvent(null), null);
 });
+
+// ── Review fixes ───────────────────────────────────────
+
+// A plan change produces a real PAID invoice for the prorated difference
+// (billing_reason: subscription_update). Granting on it would hand out a second
+// full allowance inside one billing period.
+test('webhook: a proration invoice from a plan change grants nothing', async () => {
+  const res = await send(invoiceEvent({ id: 'evt_proration', billing_reason: 'subscription_update' }));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).ignored, 'invoice.paid');
+  assert.equal(accounts.get('u-1').cycleBalance, 0);
+});
+
+test('webhook: subscription_create and subscription_cycle both grant', async () => {
+  await send(invoiceEvent({ id: 'evt_first', billing_reason: 'subscription_create' }));
+  assert.equal(accounts.get('u-1').cycleBalance, 20, 'first payment');
+  await send(invoiceEvent({ id: 'evt_renew', billing_reason: 'subscription_cycle' }));
+  assert.equal(accounts.get('u-1').cycleBalance, 40, 'renewal stacks');
+});
+
+// The credits stamped on the subscription at checkout freeze the plan the user
+// FIRST bought. After a portal upgrade, renewals must follow the price actually
+// being billed, not the stale stamp.
+test('webhook: a renewal follows the invoiced price, not the stamped metadata', async () => {
+  const res = await send(invoiceEvent({
+    id: 'evt_upgraded',
+    subMetadata: { uid: 'u-1', credits: '5' },   // stale: user upgraded since
+    priceId: 'price_sub'                          // real plan is 20 credits
+  }));
+  assert.equal((await res.json()).granted, 20, 'resolved from the price, not the stamp');
+  const grant = calls.find((c) => c.op === 'addCredits');
+  assert.equal(grant.cap, rolloverCap(20), 'the cap follows the current plan too');
+});
+
+// Delayed-notification methods finish the session as `unpaid` and confirm later.
+test('webhook: an async payment success credits the pack', async () => {
+  const ev = packEvent({ id: 'evt_async' });
+  ev.type = 'checkout.session.async_payment_succeeded';
+  const res = await send(ev);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).granted, 20);
+  assert.equal(accounts.get('u-1').packBalance, 25);
+});
+
+// A redelivered old invoice carries no new information; writing 'active' from it
+// would resurrect a subscription the user has since cancelled.
+test('webhook: a duplicate delivery does not revive a cancelled subscription', async () => {
+  await send(invoiceEvent({ id: 'evt_dup_status' }));
+  accounts.get('u-1').subscriptionStatus = 'canceled';
+  calls = [];
+
+  await send(invoiceEvent({ id: 'evt_dup_status' }));
+  assert.equal(accounts.get('u-1').subscriptionStatus, 'canceled', 'still cancelled');
+  assert.equal(calls.some((c) => c.op === 'setSubscription'), false, 'no status write at all');
+});
+
+// A Stripe outage while resolving the price must NOT be acked as unresolved —
+// that would permanently lose the grant for an already-paid invoice.
+test('webhook: a transient price-lookup failure returns 500 so Stripe retries', async () => {
+  const original = mockStripe.prices.retrieve;
+  mockStripe.prices.retrieve = async () => { const e = new Error('Stripe down'); e.statusCode = 503; throw e; };
+  try {
+    const res = await send(invoiceEvent({ id: 'evt_outage', subMetadata: { uid: 'u-1' } }));
+    assert.equal(res.status, 500);
+    assert.equal(accounts.get('u-1').cycleBalance, 0);
+  } finally {
+    mockStripe.prices.retrieve = original;
+  }
+});
+
+test('webhook: a subscription grant records the plan name', async () => {
+  await send(invoiceEvent({ id: 'evt_planname' }));
+  const sub = calls.find((c) => c.op === 'setSubscription' && c.plan);
+  assert.equal(sub.plan, 'Organizer Pack (20)', 'plan is no longer stuck on free');
+});

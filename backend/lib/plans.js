@@ -101,20 +101,32 @@ async function listCatalog(stripe) {
 
 /**
  * Fetch a single price by id and resolve it to a plan.
+ *
+ * Returns null ONLY for a definitively unknown or unsellable price. A transient
+ * Stripe failure re-throws, because the two must not be conflated: swallowing an
+ * outage would make checkout answer "Unknown or unavailable plan" (a 400 the
+ * user cannot act on) and would make the webhook permanently ack a *paid* event
+ * as unresolved — losing the grant instead of retrying into it.
  * @param {import('stripe')} stripe  a configured Stripe client
  * @param {string} priceId  the Stripe price id
  * @returns {Promise<object|null>}  the plan, or null when unknown/not purchasable
+ * @throws  on a transient Stripe error (network, 5xx, rate limit)
  */
 async function planById(stripe, priceId) {
   if (typeof priceId !== 'string' || !priceId.startsWith('price_')) return null;
+  let price;
   try {
-    const price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
-    const plan = planFromPrice(price);
-    if (!plan || !plan.active) return null;
-    return plan;
-  } catch {
-    return null;
+    price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
+  } catch (err) {
+    // 404 (and a malformed-id 400) mean the price genuinely is not there.
+    const status = err?.statusCode ?? err?.status;
+    if (status === 404 || err?.code === 'resource_missing') return null;
+    if (status === 400) return null;
+    throw err;
   }
+  const plan = planFromPrice(price);
+  if (!plan || !plan.active) return null;
+  return plan;
 }
 
 module.exports = {

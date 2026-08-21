@@ -350,7 +350,11 @@ async function stripeWebhookHandler(req, res) {
 
     // Keep plan/status current off the same payment, so an active subscriber is
     // never shown as inactive just because the lifecycle event arrived first.
-    if (intent.subscriptionId) {
+    //
+    // Skipped on a duplicate: a redelivery of an old invoice.paid carries no new
+    // information, and writing 'active' from it would resurrect a subscription
+    // that has since been cancelled.
+    if (intent.subscriptionId && !receipt.duplicate) {
       await credits.setSubscription(uid, {
         subscriptionId: intent.subscriptionId,
         status: 'active',
@@ -656,7 +660,18 @@ function resolveAppUrl(appUrl, allowed) {
   if (fallback && fallback !== '*') return fallback;
   return 'http://localhost:8080';
 }
+const APP_URL_FALLBACK = 'http://localhost:8080';
 const APP_URL = resolveAppUrl(process.env.APP_URL, process.env.ALLOWED_ORIGIN);
+// Both APP_URL and ALLOWED_ORIGIN are optional, so a deploy that sets neither
+// silently sends paying customers to localhost after checkout. Treat that as a
+// misconfiguration in production rather than a default worth honouring.
+const APP_URL_CONFIGURED = APP_URL !== APP_URL_FALLBACK;
+if (!APP_URL_CONFIGURED && process.env.NODE_ENV === 'production') {
+  console.error(
+    'CONFIG ERROR: neither APP_URL nor a concrete ALLOWED_ORIGIN is set. ' +
+    'Stripe checkout would return buyers to ' + APP_URL_FALLBACK + ', so /api/billing/* is disabled.'
+  );
+}
 
 /**
  * The purchasable catalog, resolved live from Stripe.
@@ -690,6 +705,12 @@ app.get('/api/billing/plans', async (req, res) => {
  */
 app.post('/api/billing/checkout', auth.requireAuth(), async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Billing is not configured' });
+  // Refusing the sale beats taking the money and stranding the buyer on a dead
+  // localhost page — the webhook would still grant the credits, so they would be
+  // charged, credited, and shown nothing.
+  if (!APP_URL_CONFIGURED && process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ error: 'Billing is not configured', code: 'app_url_unset' });
+  }
   if (!req.user.emailVerified) {
     return res.status(403).json({ error: 'Email verification required', code: 'email_unverified' });
   }

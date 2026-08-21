@@ -17,7 +17,16 @@ name: CI/CD Pipeline
 #
 # Auth is keyless via Workload Identity Federation. App secrets live in GCP
 # Secret Manager (attached with --set-secrets); nothing secret is stored in
-# GitHub. Config comes from repo VARIABLES (Settings → Secrets and variables →
+# GitHub.
+#
+# PREREQUISITE — Secret Manager secrets are PROJECT-SCOPED, and every secret
+# named in --set-secrets must already exist WITH A VERSION in the target project
+# or the deploy step fails. Both the prod and dev projects therefore need all
+# four: anthropic-api-key, resend-api-key, stripe-secret-key, stripe-webhook-secret
+# (test-mode Stripe values in dev, live-mode in prod). Store them with
+# `printf '%s' ... | gcloud secrets versions add ... --data-file=-` — a trailing
+# newline from `echo`/`jq -r` is invisible in the console and silently breaks
+# Stripe webhook signature verification. See CLAUDE.md → Deployment. Config comes from repo VARIABLES (Settings → Secrets and variables →
 # Actions → Variables): GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER,
 # GCP_DEPLOY_SA (+ optional ANTHROPIC_MODEL, REGISTRATION_EMAIL,
 # REGISTRATION_FROM, DONATION_URL, ALLOWED_ORIGIN, FREE_CREDITS, APP_URL,

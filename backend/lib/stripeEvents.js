@@ -24,6 +24,11 @@
 const REASON_PACK = 'pack_purchase';
 const REASON_SUBSCRIPTION = 'subscription_credit';
 
+// Invoice billing reasons that earn a cycle's credits. `subscription_update`
+// (proration from a plan change) and `manual` are deliberately excluded — they
+// are real paid invoices, but they are not a new billing period.
+const GRANTING_BILLING_REASONS = new Set(['subscription_create', 'subscription_cycle']);
+
 /**
  * Pull the Root & Fruit uid out of a checkout session.
  * `client_reference_id` is the canonical slot; metadata is the belt-and-braces
@@ -121,7 +126,13 @@ function intentFromEvent(event) {
 
   switch (event.type) {
     // ── One-time packs ────────────────────────────────
-    case 'checkout.session.completed': {
+    // `async_payment_succeeded` is the delayed-notification counterpart: methods
+    // that settle after the fact (bank debits, vouchers) finish the session as
+    // `unpaid` and confirm later. Without it those purchases are charged and
+    // never credited. Both events carry the same Session shape, and the event id
+    // differs, so the idempotency record cannot collide.
+    case 'checkout.session.completed':
+    case 'checkout.session.async_payment_succeeded': {
       // Subscriptions are credited on invoice.paid instead — crediting here too
       // would grant the first month twice.
       if (object.mode !== 'payment') return null;
@@ -148,15 +159,24 @@ function intentFromEvent(event) {
     case 'invoice.paid': {
       const subscriptionId = subscriptionFromInvoice(object);
       if (!subscriptionId) return null; // a one-off invoice, not our subscription flow
+      // Only a new subscription or a genuine renewal earns a cycle's credits.
+      // A plan change also produces a paid invoice (`subscription_update`) for
+      // the prorated difference; granting on that would hand out a second full
+      // allowance inside one billing period.
+      if (!GRANTING_BILLING_REASONS.has(object.billing_reason)) return null;
       const line = billableLine(object);
       if (!line) return null;
-      const stamped = Number(object?.parent?.subscription_details?.metadata?.credits);
       return {
         kind: 'grant',
         uid: uidFromInvoice(object),
         customerId: typeof object.customer === 'string' ? object.customer : object.customer?.id || null,
         priceId: line.priceId,
-        credits: stamped > 0 ? stamped : null,
+        // Deliberately NOT the `credits` stamped on the subscription at checkout:
+        // that value freezes the plan the user first bought, so after a change
+        // via the Customer Portal every renewal would grant the OLD allowance
+        // (and derive the rollover cap from it). The price on the invoice line
+        // is the plan actually being billed, so the caller re-resolves from it.
+        credits: null,
         quantity: line.quantity,
         bucket: 'cycle',
         reason: REASON_SUBSCRIPTION,

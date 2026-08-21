@@ -98,3 +98,40 @@ test('scaleCredits: multiplies by quantity and re-clamps', () => {
   assert.equal(scaleCredits(20, 0), 20, 'a nonsense quantity means 1, not 0');
   assert.equal(scaleCredits(MAX_GRANT, 5), MAX_GRANT, 'quantity cannot escape the ceiling');
 });
+
+// ── planById error semantics ───────────────────────────
+// An unknown price and a Stripe outage must not look the same: swallowing the
+// outage makes checkout answer an unactionable 400, and makes the webhook
+// permanently ack a PAID event as unresolved instead of retrying into it.
+const { planById } = require('../lib/plans');
+
+const stub = (fn) => ({ prices: { retrieve: fn } });
+
+test('planById: a 404 resolves to null — the price really is gone', async () => {
+  const err = new Error('No such price'); err.statusCode = 404;
+  assert.equal(await planById(stub(async () => { throw err; }), 'price_x'), null);
+});
+
+test('planById: resource_missing resolves to null', async () => {
+  const err = new Error('No such price'); err.code = 'resource_missing';
+  assert.equal(await planById(stub(async () => { throw err; }), 'price_x'), null);
+});
+
+test('planById: a transient failure re-throws so the caller can retry', async () => {
+  const err = new Error('Service unavailable'); err.statusCode = 503;
+  await assert.rejects(() => planById(stub(async () => { throw err; }), 'price_x'), /Service unavailable/);
+});
+
+test('planById: a network error with no status re-throws', async () => {
+  await assert.rejects(
+    () => planById(stub(async () => { throw new Error('ECONNRESET'); }), 'price_x'),
+    /ECONNRESET/
+  );
+});
+
+test('planById: a non-price id short-circuits without calling Stripe', async () => {
+  let called = false;
+  const s = stub(async () => { called = true; });
+  assert.equal(await planById(s, 'prod_1'), null);
+  assert.equal(called, false);
+});
