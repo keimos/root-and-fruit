@@ -632,12 +632,31 @@ app.post('/api/account', auth.requireAuth(), async (req, res) => {
 });
 
 // ── Billing (Stripe Checkout + Customer Portal) ────────
-// Where Stripe sends the browser back to. Deliberately NOT derived from the
-// request's Origin/Referer: those are attacker-controllable, and a redirect
-// target built from them is an open redirect wearing a Stripe URL.
-const APP_URL = process.env.APP_URL
-  || (process.env.ALLOWED_ORIGIN && process.env.ALLOWED_ORIGIN !== '*' ? process.env.ALLOWED_ORIGIN : '')
-  || 'http://localhost:8080';
+/**
+ * Resolve the single public URL Stripe sends the browser back to.
+ *
+ * Deliberately NOT derived from the request's Origin/Referer: those are
+ * attacker-controllable, and a redirect target built from them is an open
+ * redirect wearing a Stripe URL.
+ *
+ * Takes only the FIRST entry when falling back to ALLOWED_ORIGIN, because that
+ * variable is a LIST (one deployment answers on several origins) while a
+ * redirect target must be exactly one URL. Concatenating the list produced
+ * `https://a,https://b/?checkout=success`, which is not a reachable address.
+ * Trailing slashes are trimmed so callers can append `/?...` unambiguously.
+ * @param {string|undefined} appUrl   explicit APP_URL, if set
+ * @param {string|undefined} allowed  ALLOWED_ORIGIN (may be a list, or '*')
+ * @returns {string}  one origin with no trailing slash
+ */
+function resolveAppUrl(appUrl, allowed) {
+  const first = (v) => String(v || '').split(',')[0].trim().replace(/\/+$/, '');
+  const explicit = first(appUrl);
+  if (explicit) return explicit;
+  const fallback = first(allowed);
+  if (fallback && fallback !== '*') return fallback;
+  return 'http://localhost:8080';
+}
+const APP_URL = resolveAppUrl(process.env.APP_URL, process.env.ALLOWED_ORIGIN);
 
 /**
  * The purchasable catalog, resolved live from Stripe.
@@ -862,6 +881,7 @@ module.exports.isRetryable = isRetryable;
 module.exports.clampInt = clampInt;
 module.exports.promptSize = promptSize;
 module.exports.parseAllowedOrigins = parseAllowedOrigins;
+module.exports.resolveAppUrl = resolveAppUrl;
 module.exports.LIMITS = LIMITS;
 // Test-only: inject a fake Firebase ID-token verifier so the auth middleware can
 // be exercised without a live Firebase project. Never called in prod.

@@ -12,7 +12,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { clampInt, promptSize, LIMITS, parseAllowedOrigins } = require('../server');
+const { clampInt, promptSize, LIMITS, parseAllowedOrigins, resolveAppUrl } = require('../server');
 
 // ── clampInt ───────────────────────────────────────────
 test('clampInt: passes through a value already in range', () => {
@@ -95,4 +95,36 @@ test('parseAllowedOrigins: unset or wildcard stays fully open', () => {
 
 test('parseAllowedOrigins: a single origin still works', () => {
   assert.deepEqual(parseAllowedOrigins('https://only.example.com'), ['https://only.example.com']);
+});
+
+// ── Stripe redirect target ─────────────────────────────
+// ALLOWED_ORIGIN is a LIST but a redirect target is ONE url. Concatenating the
+// list shipped users to `https://a,https://b/?checkout=success` after paying.
+test('resolveAppUrl: takes only the first origin from a list', () => {
+  assert.equal(
+    resolveAppUrl(undefined, 'https://a.example.com,https://b.example.com'),
+    'https://a.example.com'
+  );
+});
+
+test('resolveAppUrl: an explicit APP_URL wins over ALLOWED_ORIGIN', () => {
+  assert.equal(resolveAppUrl('https://app.example.com', 'https://other.example.com'), 'https://app.example.com');
+});
+
+test('resolveAppUrl: trims trailing slashes so callers can append /?...', () => {
+  assert.equal(resolveAppUrl('https://a.example.com/', undefined), 'https://a.example.com');
+  assert.equal(resolveAppUrl('https://a.example.com///', undefined), 'https://a.example.com');
+});
+
+test('resolveAppUrl: falls back to localhost when unset or wildcarded', () => {
+  assert.equal(resolveAppUrl(undefined, undefined), 'http://localhost:8080');
+  assert.equal(resolveAppUrl(undefined, '*'), 'http://localhost:8080');
+  assert.equal(resolveAppUrl('', ''), 'http://localhost:8080');
+});
+
+test('resolveAppUrl: the produced success_url is a single valid URL', () => {
+  const base = resolveAppUrl(undefined, 'https://a.example.com,https://b.example.com');
+  const url = new URL(`${base}/?checkout=success`);
+  assert.equal(url.origin, 'https://a.example.com');
+  assert.equal(url.searchParams.get('checkout'), 'success');
 });
