@@ -128,3 +128,20 @@ test('resolveAppUrl: the produced success_url is a single valid URL', () => {
   assert.equal(url.origin, 'https://a.example.com');
   assert.equal(url.searchParams.get('checkout'), 'success');
 });
+
+// ── resolveAppUrl: ReDoS resistance (CodeQL js/polynomial-redos) ──────
+// The old `replace(/\/+$/, '')` was quadratic: anchored at $, the run of
+// slashes was retried from every start offset before it could fail.
+test('resolveAppUrl: a long slash run trims in linear time', () => {
+  const nasty = 'https://a.example.com/' + '/'.repeat(50000) + 'x';
+  const t0 = process.hrtime.bigint();
+  const out = resolveAppUrl(nasty, undefined);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 250, `trim took ${ms.toFixed(1)}ms — quadratic behaviour is back`);
+  assert.ok(out.endsWith('x'), 'nothing to trim when the string does not end in a slash');
+});
+
+test('resolveAppUrl: trims only trailing slashes, however many', () => {
+  assert.equal(resolveAppUrl('https://a.example.com' + '/'.repeat(200), undefined), 'https://a.example.com');
+  assert.equal(resolveAppUrl('https://a.example.com/path/', undefined), 'https://a.example.com/path');
+});

@@ -59,15 +59,32 @@ async function verifyIdToken(token) {
   return a.auth().verifyIdToken(token);
 }
 
+// A Firebase ID token is roughly 1KB. Anything an order of magnitude larger is
+// not a token we would ever accept, so refusing it before parsing keeps the cost
+// of a hostile header constant.
+const MAX_AUTH_HEADER = 8192;
+
 /**
  * Pull the bearer token out of the Authorization header.
+ *
+ * Parsed WITHOUT a backtracking regex. The previous `/^Bearer\s+(.+)$/i` was
+ * quadratic on hostile input: `\s` and `.` both match spaces, so every split
+ * point between them had to be retried before the match could fail
+ * (`"Bearer " + " ".repeat(1e5) + "x\ny"` was enough). This header is
+ * attacker-controlled and unauthenticated — optionalAuth runs it on every
+ * /api/* request — so the parse has to be linear by construction, not by luck.
+ * `String.search` with a single-character class cannot backtrack.
  * @param {import('express').Request} req  the incoming request
- * @returns {string|null}  the raw token, or null if absent/malformed
+ * @returns {string|null}  the raw token, or null if absent/malformed/oversized
  */
 function extractBearer(req) {
-  const header = req.headers.authorization || '';
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  return match ? match[1].trim() : null;
+  const header = req.headers.authorization;
+  if (typeof header !== 'string' || header.length > MAX_AUTH_HEADER) return null;
+  const trimmed = header.trim();
+  const sep = trimmed.search(/\s/);
+  if (sep === -1) return null;
+  if (trimmed.slice(0, sep).toLowerCase() !== 'bearer') return null;
+  return trimmed.slice(sep + 1).trim() || null;
 }
 
 /**
@@ -117,4 +134,7 @@ function requireAuth() {
   };
 }
 
-module.exports = { optionalAuth, requireAuth, resolveUser, extractBearer, verifyIdToken, __setVerifier };
+module.exports = {
+  optionalAuth, requireAuth, resolveUser, extractBearer, verifyIdToken, __setVerifier,
+  MAX_AUTH_HEADER
+};

@@ -15,7 +15,7 @@ const { test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const authLib = require('../lib/auth');
-const { extractBearer, optionalAuth, requireAuth, __setVerifier } = authLib;
+const { extractBearer, optionalAuth, requireAuth, __setVerifier, MAX_AUTH_HEADER } = authLib;
 const app = require('../server');
 
 /** Build a minimal Express-ish response spy. @returns {object} res with status/json capture */
@@ -119,4 +119,36 @@ test('an invalid token does not block the request (reaches handler → 400, not 
   } finally {
     server.close();
   }
+});
+
+// ── extractBearer: ReDoS resistance (CodeQL js/polynomial-redos) ──────
+// The Authorization header is attacker-controlled and unauthenticated —
+// optionalAuth parses it on EVERY /api/* request. The old
+// /^Bearer\s+(.+)$/i was quadratic because \s and . both match a space, so
+// every split point between them had to be retried before the match failed.
+test('extractBearer: a pathological header parses in linear time', () => {
+  // Shape that forced the backtracking: a long run of spaces, then content
+  // the trailing anchor cannot accept.
+  const hostile = 'Bearer ' + ' '.repeat(50000) + 'x\ny';
+  const t0 = process.hrtime.bigint();
+  extractBearer({ headers: { authorization: hostile } });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 250, `parse took ${ms.toFixed(1)}ms — quadratic behaviour is back`);
+});
+
+test('extractBearer: refuses an oversized header outright', () => {
+  const huge = 'Bearer ' + 'a'.repeat(MAX_AUTH_HEADER + 1);
+  assert.equal(extractBearer({ headers: { authorization: huge } }), null);
+  // Just under the cap still parses, so the bound does not reject real tokens
+  // (a Firebase ID token is roughly 1KB).
+  const ok = 'Bearer ' + 'a'.repeat(2000);
+  assert.equal(extractBearer({ headers: { authorization: ok } }), 'a'.repeat(2000));
+});
+
+test('extractBearer: still tolerates the whitespace real clients send', () => {
+  assert.equal(extractBearer({ headers: { authorization: '  Bearer   tok  ' } }), 'tok');
+  assert.equal(extractBearer({ headers: { authorization: 'Bearer\ttok' } }), 'tok');
+  assert.equal(extractBearer({ headers: { authorization: 'Bearer' } }), null, 'scheme with no token');
+  assert.equal(extractBearer({ headers: { authorization: 'Bearer   ' } }), null, 'whitespace-only token');
+  assert.equal(extractBearer({ headers: { authorization: 123 } }), null, 'non-string header');
 });
