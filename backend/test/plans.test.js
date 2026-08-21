@@ -135,3 +135,62 @@ test('planById: a non-price id short-circuits without calling Stripe', async () 
   assert.equal(await planById(s, 'prod_1'), null);
   assert.equal(called, false);
 });
+
+// ── listCatalog diagnostics ────────────────────────────
+// A mistyped metadata key (credit vs credits) silently empties the catalog.
+// The warning names the dropped price AND the keys that were present, which is
+// what turns "the picker is empty" into an obvious one-character fix.
+const { listCatalog } = require('../lib/plans');
+
+test('listCatalog: names skipped prices and the metadata keys they did carry', async () => {
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.map(String).join(' '));
+  try {
+    const stripe = { prices: { async list() { return { data: [
+      { id: 'price_ok', active: true, unit_amount: 850, currency: 'usd',
+        metadata: { credits: '5' },
+        product: { id: 'p1', name: 'Good', active: true, metadata: {} } },
+      { id: 'price_typo', active: true, unit_amount: 1500, currency: 'usd',
+        metadata: {},
+        product: { id: 'p2', name: 'Typo', active: true, metadata: { credit: '10' } } }
+    ] }; } } };
+
+    const catalog = await listCatalog(stripe);
+    assert.equal(catalog.length, 1, 'only the correctly-keyed price is sellable');
+    assert.equal(catalog[0].priceId, 'price_ok');
+
+    const msg = warnings.join(' ');
+    assert.match(msg, /price_typo/, 'the dropped price is named');
+    assert.match(msg, /credit\b/, 'the key it actually had is shown');
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test('listCatalog: says nothing when every price is purchasable', async () => {
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const stripe = { prices: { async list() { return { data: [
+      { id: 'price_ok', active: true, unit_amount: 850, currency: 'usd',
+        metadata: { credits: '5' },
+        product: { id: 'p1', name: 'Good', active: true, metadata: {} } }
+    ] }; } } };
+    assert.equal((await listCatalog(stripe)).length, 1);
+    assert.equal(warnings.length, 0, 'no noise on a healthy catalog');
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test('listCatalog: sorts cheapest first', async () => {
+  const stripe = { prices: { async list() { return { data: [
+    { id: 'b', active: true, unit_amount: 3000, currency: 'usd', metadata: { credits: '20' },
+      product: { id: 'p', name: 'B', active: true, metadata: {} } },
+    { id: 'a', active: true, unit_amount: 850, currency: 'usd', metadata: { credits: '5' },
+      product: { id: 'p', name: 'A', active: true, metadata: {} } }
+  ] }; } } };
+  assert.deepEqual((await listCatalog(stripe)).map((p) => p.priceId), ['a', 'b']);
+});

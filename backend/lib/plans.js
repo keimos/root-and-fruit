@@ -88,15 +88,32 @@ function scaleCredits(credits, quantity = 1) {
  */
 async function listCatalog(stripe) {
   const prices = await stripe.prices.list({ active: true, limit: 100, expand: ['data.product'] });
-  return prices.data
-    .map(planFromPrice)
-    .filter((p) => p && p.active)
+
+  const catalog = [];
+  const skipped = [];
+  for (const price of prices.data) {
+    const plan = planFromPrice(price);
+    if (!plan || !plan.active) { skipped.push(price); continue; }
     // A price whose product has been archived is not purchasable.
-    .filter((p) => {
-      const price = prices.data.find((x) => x.id === p.priceId);
-      return typeof price.product !== 'object' || price.product.active !== false;
-    })
-    .sort((a, b) => (a.unitAmount ?? 0) - (b.unitAmount ?? 0));
+    if (typeof price.product === 'object' && price.product?.active === false) { skipped.push(price); continue; }
+    catalog.push(plan);
+  }
+
+  // An unpurchasable price is nearly always a catalog mistake — most often the
+  // credit count sitting under a mistyped metadata key. Silently omitting it
+  // leaves an operator staring at an empty picker with nothing to go on, so name
+  // what was dropped and show the metadata keys that WERE present.
+  if (skipped.length) {
+    console.warn('Catalog: %d price(s) not purchasable (no usable metadata.credits): %s',
+      skipped.length,
+      skipped.map((p) => {
+        const productMeta = typeof p.product === 'object' ? Object.keys(p.product?.metadata || {}) : [];
+        const keys = [...new Set([...Object.keys(p.metadata || {}), ...productMeta])];
+        return `${p.id}[${keys.join(',') || 'no metadata'}]`;
+      }).join(' '));
+  }
+
+  return catalog.sort((a, b) => (a.unitAmount ?? 0) - (b.unitAmount ?? 0));
 }
 
 /**
