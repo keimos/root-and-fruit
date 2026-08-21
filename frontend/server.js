@@ -11,11 +11,59 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8081';
 
+/**
+ * Build the Content-Security-Policy for this deployment.
+ *
+ * This is the backstop for the app's biggest structural risk: AI-generated text
+ * is rendered into innerHTML, so a prompt injection that slipped past the
+ * server-side prompt and schema validation could try to emit markup. The upstream
+ * defenses stop the model producing it; CSP stops the browser acting on it — and
+ * an injected <script src="evil"> is the case that matters, because a stolen
+ * Firebase ID token spends the victim's credits.
+ *
+ * 'unsafe-inline' for script-src is unavoidable: the whole app is one inline
+ * <script> by design (see CLAUDE.md's single-file rule), and a nonce would have
+ * to be threaded through the same injection that adds __RF_CONFIG__. It still
+ * blocks EXTERNAL script loads, which is the vector worth closing.
+ * @param {string} backendUrl  the API origin this build talks to
+ * @returns {string}  the CSP header value
+ */
+function buildCsp(backendUrl) {
+  const authDomain = process.env.FIREBASE_AUTH_DOMAIN;
+  return [
+    "default-src 'self'",
+    // cdnjs: Font Awesome + jsPDF. gstatic: the Firebase compat SDK.
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://www.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
+    "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com",
+    // data:/blob: — the share card is a <canvas> exported via toDataURL, and
+    // jsPDF hands back a blob for download.
+    "img-src 'self' data: blob:",
+    ["connect-src 'self'", backendUrl,
+      'https://identitytoolkit.googleapis.com',
+      'https://securetoken.googleapis.com'].join(' '),
+    // Firebase compat may open an auth helper iframe on its own domain.
+    authDomain ? `frame-src https://${authDomain}` : "frame-src 'none'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "form-action 'self'"
+  ].join('; ');
+}
+
 // Security headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  // frame-ancestors supersedes this in modern browsers; kept for older ones,
+  // and set to DENY so the two agree rather than contradict.
+  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', buildCsp(BACKEND_URL));
+  // Cloud Run is HTTPS-only, so committing to it costs nothing today. NOTE:
+  // includeSubDomains binds any future subdomain of a custom domain too.
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // The app uses none of these; deny them so injected code cannot either.
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   next();
 });
 

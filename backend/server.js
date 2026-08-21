@@ -3,6 +3,7 @@
  * Handles: Anthropic API proxy, Firestore persistence, CORS
  */
 
+const crypto = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
@@ -637,6 +638,22 @@ app.post('/api/account', auth.requireAuth(), async (req, res) => {
 
 // ── Billing (Stripe Checkout + Customer Portal) ────────
 /**
+ * Trim trailing '/' characters without a backtracking quantifier.
+ *
+ * The obvious `replace(/\/+$/, '')` is quadratic: anchored at `$`, the engine
+ * retries the run of slashes from every start offset before it can fail. This
+ * input is operator-supplied config rather than request data, so the exposure
+ * is small — but a counted scan is both linear and clearer about intent.
+ * @param {string} s  the string to trim
+ * @returns {string}  s with any trailing slashes removed
+ */
+function stripTrailingSlashes(s) {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return s.slice(0, end);
+}
+
+/**
  * Resolve the single public URL Stripe sends the browser back to.
  *
  * Deliberately NOT derived from the request's Origin/Referer: those are
@@ -653,7 +670,7 @@ app.post('/api/account', auth.requireAuth(), async (req, res) => {
  * @returns {string}  one origin with no trailing slash
  */
 function resolveAppUrl(appUrl, allowed) {
-  const first = (v) => String(v || '').split(',')[0].trim().replace(/\/+$/, '');
+  const first = (v) => stripTrailingSlashes(String(v || '').split(',')[0].trim());
   const explicit = first(appUrl);
   if (explicit) return explicit;
   const fallback = first(allowed);
@@ -861,7 +878,11 @@ app.post('/api/share', async (req, res) => {
   if (!audit) return res.status(400).json({ error: 'audit required' });
 
   try {
-    const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    // Cryptographically random, not Math.random(): V8's PRNG state is
+    // recoverable from a handful of observed outputs, which would make every
+    // OTHER share token predictable from one you were legitimately given.
+    // 16 bytes = 128 bits, the same standard as a session identifier.
+    const token = crypto.randomBytes(16).toString('hex');
     await db.collection('shared_audits').doc(token).set({
       audit,
       token,

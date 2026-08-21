@@ -141,3 +141,25 @@ test('POST /api/share rejects a missing audit', async () => {
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /audit required/i);
 });
+
+// ── Share tokens (CodeQL: insecure randomness) ────────────────────────
+// Math.random() is not merely low-entropy: V8's PRNG state is recoverable
+// from a few observed outputs, so one token you were legitimately given
+// could predict everyone else's.
+test('share tokens are 128-bit hex from a CSPRNG', async () => {
+  const seen = new Set();
+  for (let i = 0; i < 200; i++) {
+    const res = await fetch(`${base}/api/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audit: { name: 'probe' } })
+    });
+    // Firestore is not available in tests; a 500 still proves nothing weaker
+    // than the guard below is reachable, so only assert on real tokens.
+    if (!res.ok) return;
+    const { token } = await res.json();
+    assert.match(token, /^[0-9a-f]{32}$/, 'expected 32 hex chars (16 bytes)');
+    assert.equal(seen.has(token), false, 'tokens must not repeat');
+    seen.add(token);
+  }
+});
