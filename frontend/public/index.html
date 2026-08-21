@@ -75,16 +75,22 @@
     position: sticky; top: 0; z-index: 100;
     padding: 0 16px;
   }
+  /* Chrome (header + nav) is wider than the 780px reading column: the signed-in
+     header carries ~950px of content — logo, three actions, the credit pill,
+     the account block and the live score — which simply does not fit 780. The
+     body stays 780 so text keeps its measure. Height stays 64px because the nav
+     below is `position: sticky; top: 64px` and would detach if this grew. */
   .header-inner {
-    max-width: 780px; margin: 0 auto;
+    max-width: 960px; margin: 0 auto;
     display: flex; align-items: center; justify-content: space-between;
-    height: 64px;
+    height: 64px; gap: 12px;
   }
-  .logo { display: flex; align-items: baseline; gap: 8px; }
+  /* The logo is the one element that may compress; the balance never is. */
+  .logo { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
   .logo-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 0.08em; color: #FFFFFF; }
   .logo-title span { color: var(--gold-bright); }
   .logo-sub { font-size: 10px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.2em; }
-  .header-score-wrap { display: flex; align-items: center; gap: 16px; }
+  .header-score-wrap { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
   #liveScore {
     font-family: 'Bebas Neue', sans-serif;
     font-size: 36px;
@@ -528,6 +534,13 @@
 
   /* ─── RESPONSIVE HELPERS ─── */
   .hide-xs { display: inline; }
+  /* Below ~1000px the row overflows again well before .hide-xs kicks in at 560,
+     so shed the least load-bearing things first: the signed-in email (Sign Out
+     stays, so the state is still legible) and the logo's subtitle. */
+  @media (max-width: 1000px) {
+    .auth-account-email { display: none; }
+    .logo-sub { display: none; }
+  }
   @media (max-width: 560px) {
     .hide-xs { display: none; }
     .header-actions .btn-ghost { padding: 6px 9px; }
@@ -574,14 +587,38 @@
   /* Inline status under a modal action (verification resend / recheck). */
   .auth-switch.auth-ok { color: var(--green); }
   .auth-switch.auth-err { color: var(--red); }
+
+  /* ── Billing plan picker (credit wall) ── */
+  .plan-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 0 auto 18px; width: fit-content; }
+  .plan-toggle button { border: none; background: transparent; padding: 8px 18px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .plan-toggle button.active { background: var(--navy); color: var(--gold-bright); }
+  .plan-grid { display: grid; gap: 10px; }
+  .plan-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); text-align: left; }
+  .plan-card:hover { border-color: var(--gold); }
+  .plan-name { font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 0.06em; color: var(--text); }
+  .plan-meta { font-size: 11px; color: var(--text-dimmer); margin-top: 3px; }
+  .plan-price { font-family: 'Bebas Neue', sans-serif; font-size: 24px; line-height: 1; color: var(--text); }
+  .plan-price small { font-family: 'DM Sans', sans-serif; font-size: 11px; color: var(--text-dimmer); letter-spacing: 0; }
+  .plan-buy { border: none; border-radius: 7px; padding: 9px 16px; cursor: pointer; background: var(--gold); color: #fff; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+  .plan-buy:hover { background: #a37e1a; }
+  .plan-buy:disabled { opacity: 0.5; cursor: not-allowed; }
+  .plan-empty { font-size: 13px; color: var(--text-dim); text-align: center; padding: 18px 0; }
   .auth-link { color: var(--gold-bright); cursor: pointer; text-decoration: underline; background: none; border: none; font: inherit; padding: 0; }
   .auth-hint { font-size: 11px; color: var(--text-dimmer); margin-top: -8px; margin-bottom: 14px; }
-  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; }
+  /* flex: 0 0 auto — the credit balance is the one header item that must never
+     be the thing that gets squeezed; it is both the status readout and the only
+     route to buying more. */
+  .credit-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 14px; border: 1px solid rgba(139,105,20,0.4); background: rgba(139,105,20,0.12); color: var(--gold-bright); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.08em; white-space: nowrap; flex: 0 0 auto; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+  .credit-pill:hover { border-color: var(--gold-bright); background: rgba(139,105,20,0.24); }
+  .credit-pill:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+  /* Explicit affordance: a clickable pill alone reads as a status badge, so the
+     way to buy more has to be visible rather than discovered. */
+  .credit-add { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: rgba(232,201,106,0.22); font-size: 9px; margin-left: 1px; }
   .credit-pill.low { border-color: rgba(192,57,43,0.5); background: rgba(192,57,43,0.12); color: #e8836f; }
   /* Signed in but unconfirmed: the free grant is waiting, not spent. */
   .credit-pill.unverified { border-style: dashed; }
   .auth-account { display: flex; align-items: center; gap: 8px; }
-  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-account-email { font-size: 12px; color: var(--gold-bright); max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .onboard-step { display: none; }
   .onboard-step.active { display: block; }
   .onboard-icon { font-size: 48px; display: block; margin-bottom: 16px; text-align: center; }
@@ -1087,14 +1124,28 @@
   <div class="modal" style="max-width:420px;">
     <div class="modal-body" style="text-align:center;">
       <div style="font-size:30px;margin-bottom:12px;"><i class="fa-solid fa-seedling" style="color:var(--gold);"></i></div>
-      <div class="auth-title">You're out of credits</div>
+      <div class="auth-title" id="creditWallTitle">You're out of credits</div>
       <div class="auth-sub" style="margin-bottom:18px;">
-        You've used all of your free AI audits. Manual scoring, saved audits, and
-        sharing stay open — only the AI audit needs a credit.
+        Manual scoring, saved audits, and sharing stay open — only the AI audit
+        needs a credit.
       </div>
-      <button class="auth-submit" onclick="closeCreditWall()">Got it</button>
-      <div class="auth-switch" style="margin-top:12px;">
-        Paid plans are coming soon.
+
+      <div class="auth-alert err" id="billingError"></div>
+
+      <div class="plan-toggle" id="planToggle" style="display:none;">
+        <button type="button" id="planTabOnce" class="active" onclick="setPlanMode('once')">One-time</button>
+        <button type="button" id="planTabSub" onclick="setPlanMode('sub')">Monthly</button>
+      </div>
+
+      <div class="plan-grid" id="planGrid">
+        <div class="plan-empty">Loading plans…</div>
+      </div>
+
+      <div class="auth-switch" style="margin-top:16px;">
+        <button class="auth-link" onclick="closeCreditWall()">Not now</button>
+        <span id="portalLinkWrap" style="display:none;">
+          &nbsp;·&nbsp;<button class="auth-link" onclick="openBillingPortal()">Manage billing</button>
+        </span>
       </div>
     </div>
   </div>
@@ -1297,14 +1348,15 @@
       <div class="header-actions">
         <button class="btn-ghost" onclick="showOnboarding()"><i class="fa-solid fa-circle-question"></i> <span class="hide-xs">How it Works</span></button>
         <button class="btn-ghost" onclick="showView('saved')"><i class="fa-solid fa-folder-open"></i> <span class="hide-xs">Saved</span></button>
-        <button class="btn-ghost" onclick="resetAll()">Reset</button>
         <!-- Auth: signed-out shows "Sign In"; signed-in shows email + Sign Out.
              Both hidden until Firebase auth initializes (config present). -->
         <button class="btn-ghost" id="authBtn" onclick="openAuthModal('signin')" style="display:none;"><i class="fa-solid fa-user"></i> <span class="hide-xs">Sign In</span></button>
         <!-- Credit balance. Display only — the server owns the real balance and
              re-checks it on every billed call. Hidden until an account loads. -->
-        <span class="credit-pill" id="creditPill" style="display:none;" title="Credits remaining">
+        <span class="credit-pill" id="creditPill" style="display:none;" role="button" tabindex="0"
+              title="Credits remaining" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">
           <i class="fa-solid fa-seedling"></i> <span id="creditCount">0</span><span class="hide-xs"> credits</span>
+          <span class="credit-add" id="creditAdd" aria-hidden="true"><i class="fa-solid fa-plus"></i></span>
         </span>
         <span class="auth-account" id="authAccount" style="display:none;">
           <span class="auth-account-email" id="authAccountEmail"></span>
@@ -1318,7 +1370,9 @@
 
 <!-- NAV -->
 <div style="border-bottom:1px solid rgba(139,105,20,0.3); background:var(--navy); position:sticky; top:64px; z-index:99; overflow-x:auto;">
-  <div class="container" style="padding-top:8px; padding-bottom:8px;">
+  <!-- Matches .header-inner's 960px so the chrome's left edge lines up with the
+       logo above it; the reading column below stays 780px. -->
+  <div class="container" style="padding-top:8px; padding-bottom:8px; max-width:960px;">
     <div class="nav-tabs" id="navTabs" style="flex-wrap:nowrap; gap:1px;">
       <button class="nav-tab active" onclick="showView('results')">Results</button>
       <button class="nav-tab" onclick="showView('community')">Community Assessment</button>
@@ -2922,7 +2976,12 @@ function initFirebaseAuth() {
       updateAuthUI();
       // Loading the account also creates it on first sign-in, which is where the
       // one-time free credit grant is issued.
-      refreshAccount();
+      refreshAccount().then(() => {
+        // Deliberately here and not in the bootstrap: onAuthStateChanged fires
+        // asynchronously, so at bootstrap time currentAuthUser is still null and
+        // the post-checkout poll would read a signed-out account and give up.
+        if (user) handleCheckoutReturn();
+      });
       // Advances the splash past the account card once a session resolves —
       // covers both a fresh sign-in and a restored one on page load.
       splashOnAuthChange();
@@ -3195,6 +3254,9 @@ let creditBalance = null;   // number when known, null when unknown / signed out
 // free grant is withheld until it is true, so this is what separates "you spent
 // your credits" from "verify your address to receive them".
 let accountVerified = false;
+// True when the last /api/account call errored. Kept distinct from "no balance"
+// so the pill can show a retry state instead of vanishing.
+let accountLoadFailed = false;
 
 /**
  * Build request headers for a billed API call, attaching the Firebase ID token.
@@ -3212,7 +3274,7 @@ async function apiHeaders(base = {}) {
  *     signed out / unreachable (side effects: network, DOM)
  */
 async function refreshAccount() {
-  if (!currentAuthUser) { creditBalance = null; accountVerified = false; updateCreditUI(); return null; }
+  if (!currentAuthUser) { creditBalance = null; accountVerified = false; accountLoadFailed = false; updateCreditUI(); return null; }
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
     const res = await fetch(backendUrl + '/api/account', { headers: await apiHeaders() });
@@ -3220,11 +3282,17 @@ async function refreshAccount() {
     const data = await res.json();
     creditBalance = data.account ? data.account.balance : null;
     accountVerified = !!(data.account && data.account.emailVerified);
+    hasBillingHistory = !!(data.account && data.account.hasBilling);
+    accountLoadFailed = false;
     updateCreditUI();
     return data.account || null;
   } catch (err) {
+    // Do NOT fail silently. Hiding the pill on error is indistinguishable from
+    // "signed out", which leaves a signed-in user staring at a header that
+    // simply has no balance in it and no way to ask why.
     console.error('Could not load account:', err);
     creditBalance = null;
+    accountLoadFailed = true;
     updateCreditUI();
     return null;
   }
@@ -3262,7 +3330,27 @@ function updateCreditUI() {
   const pill = document.getElementById('creditPill');
   const count = document.getElementById('creditCount');
   if (!pill || !count) return;
+  const add = document.getElementById('creditAdd');
+
+  // Signed in but the balance could not be loaded: show a retry affordance
+  // rather than nothing, so the failure is visible and recoverable in place.
+  if (creditBalance == null && currentAuthUser && accountLoadFailed) {
+    pill.style.display = '';
+    pill.classList.add('low');
+    count.textContent = '!';
+    pill.title = 'Could not load your credits — click to retry';
+    pill.setAttribute('aria-label', 'Could not load your credits — click to retry');
+    pill.onclick = async () => {
+      accountLoadFailed = false;
+      count.textContent = '…';
+      await refreshAccount();
+      if (accountLoadFailed) showToast('Still could not load your credits');
+    };
+    if (add) add.style.display = 'none';
+    return;
+  }
   if (creditBalance == null) { pill.style.display = 'none'; return; }
+  pill.classList.remove('low');
   pill.style.display = '';
   count.textContent = creditBalance;
   pill.classList.toggle('low', creditBalance <= 1);
@@ -3270,9 +3358,17 @@ function updateCreditUI() {
   // number alone does not explain — make the pill the way back to the wall.
   const pending = currentAuthUser && !accountVerified;
   pill.classList.toggle('unverified', !!pending);
-  pill.title = pending ? 'Verify your email to receive your free credits' : 'Credits remaining';
-  pill.onclick = pending ? openVerifyWall : null;
-  pill.style.cursor = pending ? 'pointer' : '';
+  // Unverified → the wall that explains the zero. Otherwise the pill is the
+  // standing way to buy more, so a user with credits left is never forced to
+  // run out before they can top up.
+  pill.title = pending ? 'Verify your email to receive your free credits' : 'Credits remaining — click to add more';
+  pill.setAttribute('aria-label', pending
+    ? 'Verify your email to receive your free credits'
+    : `${creditBalance} credits remaining — add more`);
+  pill.onclick = pending ? openVerifyWall : openCreditWall;
+  // The "+" promises a purchase, so it must not show on the pill that opens the
+  // verification wall instead. (`add` is resolved at the top of this function.)
+  if (add) add.style.display = pending ? 'none' : '';
 }
 
 /**
@@ -3402,16 +3498,229 @@ async function confirmVerification() {
   }
 }
 
-/** Show the out-of-credits wall. in: none  out: void (DOM mutation) */
+/** Show the out-of-credits wall. in: none  out: void (DOM mutation, network) */
 function openCreditWall() {
   const modal = document.getElementById('creditModal');
-  if (modal) modal.classList.remove('hidden');
+  if (!modal) return;
+  const title = document.getElementById('creditWallTitle');
+  // The same wall doubles as the "buy more" entry point, so the heading has to
+  // tell a first-time buyer apart from someone who has actually run out.
+  if (title) title.textContent = creditBalance > 0 ? 'Add more credits' : "You're out of credits";
+  const portal = document.getElementById('portalLinkWrap');
+  if (portal) portal.style.display = hasBillingHistory ? '' : 'none';
+  modal.classList.remove('hidden');
+  loadPlans();
 }
 
 /** Hide the out-of-credits wall. in: none  out: void (DOM mutation) */
 function closeCreditWall() {
   const modal = document.getElementById('creditModal');
   if (modal) modal.classList.add('hidden');
+}
+
+// ══════════════════════════════════════════════
+//  BILLING (Stripe Checkout)
+// ══════════════════════════════════════════════
+// The browser never sees a secret key and never names an amount — it posts a
+// price id and follows the URL the backend returns. Credits are granted by the
+// signature-verified webhook, NEVER by returning to the success URL: that URL
+// is just a string anyone could visit, so the return handler only polls for a
+// balance the server has already decided on.
+
+let cachedPlans = null;         // resolved catalog, or null until first load
+let planMode = 'once';          // which tab is showing: 'once' | 'sub'
+let hasBillingHistory = false;  // true once the account has a Stripe customer
+let checkoutReturnHandled = false; // once-guard: auth callbacks can fire twice
+
+/**
+ * Fetch the purchasable catalog and render it into the credit wall.
+ * in: none  out: Promise<void> (side effects: network, DOM)
+ */
+async function loadPlans() {
+  const grid = document.getElementById('planGrid');
+  if (!grid) return;
+  if (cachedPlans) return renderPlans();
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/billing/plans');
+    if (!res.ok) throw new Error('plans ' + res.status);
+    const data = await res.json();
+    cachedPlans = Array.isArray(data.plans) ? data.plans : [];
+    renderPlans();
+  } catch (err) {
+    console.error('Could not load plans:', err);
+    grid.innerHTML = '<div class="plan-empty">Plans are unavailable right now. Please try again shortly.</div>';
+    const toggle = document.getElementById('planToggle');
+    if (toggle) toggle.style.display = 'none';
+  }
+}
+
+/**
+ * Switch the picker between one-time packs and monthly plans.
+ * in:  mode (string) — 'once' or 'sub'
+ * out: void (DOM mutation)
+ */
+function setPlanMode(mode) {
+  planMode = mode === 'sub' ? 'sub' : 'once';
+  const once = document.getElementById('planTabOnce');
+  const sub = document.getElementById('planTabSub');
+  if (once) once.classList.toggle('active', planMode === 'once');
+  if (sub) sub.classList.toggle('active', planMode === 'sub');
+  renderPlans();
+}
+
+/**
+ * Draw the plan cards for the active tab from `cachedPlans`.
+ * in: none  out: void (DOM mutation)
+ */
+function renderPlans() {
+  const grid = document.getElementById('planGrid');
+  const toggle = document.getElementById('planToggle');
+  if (!grid || !cachedPlans) return;
+
+  const subs = cachedPlans.filter((p) => p.bucket === 'cycle');
+  const packs = cachedPlans.filter((p) => p.bucket === 'pack');
+  // Only offer the toggle when both kinds actually exist in the catalog.
+  if (toggle) toggle.style.display = subs.length && packs.length ? '' : 'none';
+  const list = planMode === 'sub' && subs.length ? subs : (packs.length ? packs : subs);
+
+  if (!list.length) {
+    grid.innerHTML = '<div class="plan-empty">No plans are available right now.</div>';
+    return;
+  }
+
+  grid.innerHTML = list.map((p) => {
+    const price = (p.unitAmount || 0) / 100;
+    const per = p.credits ? price / p.credits : 0;
+    const suffix = p.bucket === 'cycle' ? `/${p.interval || 'month'}` : '';
+    return `
+      <div class="plan-card">
+        <div>
+          <div class="plan-name">${escapeHtml(p.name || 'Credit pack')}</div>
+          <div class="plan-meta">${p.credits} credits · $${per.toFixed(2)} per audit${
+            p.bucket === 'cycle' ? ' · rolls over' : ''
+          }</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div class="plan-price">$${price.toFixed(2)}<small>${suffix}</small></div>
+          <button class="plan-buy" data-price="${escapeHtml(p.priceId)}">Buy</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  // The price id travels in a data attribute rather than an inline onclick:
+  // inside an HTML attribute, escapeHtml's &#39; decodes back to a real quote
+  // before the JS is parsed, so an inline handler would not actually be escaped
+  // for the JS string context it lands in.
+  grid.querySelectorAll('.plan-buy').forEach((btn) => {
+    btn.addEventListener('click', () => startCheckout(btn.dataset.price, btn));
+  });
+}
+
+/**
+ * Start a Stripe Checkout session and hand the browser over to Stripe.
+ * in:  priceId (string) — the Stripe price to buy
+ *      btn (HTMLElement|null) — the clicked button, disabled while in flight
+ * out: Promise<void> (side effects: network, navigation)
+ */
+async function startCheckout(priceId, btn) {
+  const err = document.getElementById('billingError');
+  if (err) err.classList.remove('show');
+  if (!requireSignIn()) return;
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/billing/checkout', {
+      method: 'POST',
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ priceId })
+    });
+    // A 401/403 here is the same account problem the audit routes hit, so reuse
+    // the one handler rather than growing a second set of walls.
+    if (!res.ok && await handleBilledRefusal(res)) return;
+    if (!res.ok) throw new Error('checkout ' + res.status);
+    const data = await res.json();
+    if (!data.url) throw new Error('no checkout url');
+    window.location.href = data.url;
+  } catch (e) {
+    console.error('Checkout failed:', e);
+    if (err) { err.textContent = 'Could not start checkout. Please try again.'; err.classList.add('show'); }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Buy'; }
+  }
+}
+
+/**
+ * Open the Stripe Customer Portal so a subscriber can cancel or update a card.
+ * in: none  out: Promise<void> (side effects: network, navigation)
+ */
+async function openBillingPortal() {
+  const err = document.getElementById('billingError');
+  if (err) err.classList.remove('show');
+  if (!requireSignIn()) return;
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/billing/portal', {
+      method: 'POST',
+      headers: await apiHeaders({ 'Content-Type': 'application/json' }),
+      body: '{}'
+    });
+    if (!res.ok && await handleBilledRefusal(res)) return;
+    if (!res.ok) throw new Error('portal ' + res.status);
+    const data = await res.json();
+    if (!data.url) throw new Error('no portal url');
+    window.location.href = data.url;
+  } catch (e) {
+    console.error('Portal failed:', e);
+    if (err) { err.textContent = 'Could not open billing. Please try again.'; err.classList.add('show'); }
+  }
+}
+
+/**
+ * Handle the redirect back from Stripe Checkout.
+ *
+ * The credits are granted by the webhook, which may land a beat after the
+ * browser returns — so this polls `/api/account` rather than trusting the URL.
+ * `?checkout=success` is a plain string any visitor could type; it is treated as
+ * a hint to re-read the balance and nothing more.
+ * in: none  out: Promise<void> (side effects: network, DOM, toast, URL cleanup)
+ */
+async function handleCheckoutReturn() {
+  if (checkoutReturnHandled) return;
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('checkout');
+  if (!outcome) return;
+  checkoutReturnHandled = true;
+
+  // Strip the marker so a refresh (or a shared link) does not replay this.
+  params.delete('checkout');
+  params.delete('session');
+  const clean = window.location.pathname + (params.toString() ? '?' + params : '');
+  window.history.replaceState({}, '', clean);
+
+  if (outcome !== 'success') {
+    showToast('Checkout cancelled — no charge was made');
+    return;
+  }
+
+  showToast('Payment received — adding your credits…');
+  const before = creditBalance;
+  // Poll while the webhook lands. Give up quietly: the credits are already the
+  // server's business, and they will show on the next account refresh.
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 1200));
+    const account = await refreshAccount();
+    if (account) hasBillingHistory = true;
+    if (creditBalance != null && before != null && creditBalance > before) {
+      showToast(`${creditBalance} credits available`);
+      return;
+    }
+    if (before == null && creditBalance > 0) {
+      showToast(`${creditBalance} credits available`);
+      return;
+    }
+  }
+  showToast('Payment received. Your credits will appear shortly.');
 }
 
 // ══════════════════════════════════════════════
@@ -4056,6 +4365,9 @@ function setLoading(on) {
     : '<i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Analyze';
 }
 
+// NOTE: currently unreferenced — the header "Reset" button was removed. Kept so
+// the capability can be re-exposed (e.g. from the Results view) without being
+// rewritten; delete it if the product decision is that clearing is not offered.
 function resetAll() {
   rootCBs.forEach(c => c.checked = false);
   branchCBs.forEach(c => c.checked = false);
@@ -4925,6 +5237,11 @@ function showView(v) {
 //  UPDATED INIT — splash gates first-run onboarding + registration
 // ══════════════════════════════════════════════
 initFirebaseAuth();    // wire Firebase auth (no-op if no config injected)
+// With auth enabled, the checkout return is driven from onAuthStateChanged (it
+// needs a resolved session to poll the balance). This covers the auth-disabled
+// build, where there is nothing to wait for and the marker would otherwise
+// linger in the URL forever.
+if (!firebaseAuth) handleCheckoutReturn();
 renderSavedList();
 loadFromURL();
 calculate();

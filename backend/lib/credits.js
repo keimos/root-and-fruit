@@ -5,11 +5,20 @@
  * is authoritative in Firestore and is NEVER read from or trusted from the
  * client — the browser only ever displays what `/api/account` reports.
  *
- * Two buckets, because the two credit sources expire differently:
- *   - `cycleBalance` — subscription credits, reset each billing cycle, expire.
- *   - `packBalance`  — purchased packs and the one-time free grant, never expire.
- * Debits spend `cycleBalance` first so the expiring credits are used before the
- * permanent ones.
+ * Two buckets, tracking where the credits came from:
+ *   - `cycleBalance` — subscription credits, topped up each billing cycle.
+ *   - `packBalance`  — purchased packs and the one-time free grant.
+ *
+ * NEITHER BUCKET EXPIRES. Subscription credits roll over and accumulate, capped
+ * at ROLLOVER_MULTIPLIER x the plan's monthly allowance so the liability stays
+ * bounded (a year of unused Organizer would otherwise be 240 permanent credits
+ * redeemable at whatever Opus costs then). Debits still spend `cycleBalance`
+ * first: with no expiry that ordering is no longer load-bearing, but it keeps
+ * refund symmetry intact and leaves the door open to reintroducing expiry.
+ *
+ * Because subscription credits are permanent, cancelling a subscription must
+ * NEVER zero a balance — the user paid for those credits. Subscription events
+ * update `plan`/`subscriptionStatus` only.
  *
  * Every balance change is a Firestore transaction that also appends a row to
  * `credit_ledger`, so the balance is always reconstructible and a stuck debit is
@@ -26,6 +35,15 @@ const { Firestore } = require('@google-cloud/firestore');
 
 const ACCOUNTS = 'accounts';
 const LEDGER = 'credit_ledger';
+// Processed Stripe event ids, written in the same transaction as the credit they
+// granted. Stripe delivers webhooks at-least-once, so this doc is what stops a
+// retried delivery from crediting the account twice.
+const STRIPE_EVENTS = 'stripe_events';
+
+// Unused subscription credits roll over, but only up to this multiple of the
+// plan's monthly allowance (e.g. Organizer at 20/mo caps at 60). Keeps the
+// "you don't lose what you paid for" promise without an unbounded liability.
+const ROLLOVER_MULTIPLIER = 3;
 
 // One-time grant for a new account. Free credits land in `packBalance` (they do
 // not expire) and are never replenished — see the free-tier decision in CLAUDE.md.
@@ -54,6 +72,71 @@ class InsufficientCreditsError extends Error {
     this.balance = balance;
     this.required = required;
   }
+}
+
+/**
+ * Error thrown when a credit grant targets a uid that has no account document.
+ * A purchase can only be started by a signed-in user (whose account is created
+ * by /api/account before checkout), so this means the account was deleted
+ * mid-flight or the uid metadata on the Stripe object is wrong — retrying will
+ * not fix either, so the webhook should record it and stop, not 500 forever.
+ */
+class UnknownAccountError extends Error {
+  /** @param {string} uid  the uid that had no account document */
+  constructor(uid) {
+    super(`No account for uid ${uid}`);
+    this.name = 'UnknownAccountError';
+    this.uid = uid;
+  }
+}
+
+/**
+ * Ceiling an account's rolled-over subscription credits may reach.
+ * @param {number} allowance  the plan's monthly credit allowance
+ * @returns {number}  the maximum cycleBalance, or 0 for a non-positive allowance
+ */
+function rolloverCap(allowance) {
+  const n = Math.max(0, Math.floor(allowance || 0));
+  return n * ROLLOVER_MULTIPLIER;
+}
+
+/**
+ * Pure: work out how a credit grant lands, applying the rollover cap.
+ * The mirror of planDebit — the arithmetic core, unit-tested directly.
+ *
+ * Only the cycle bucket is capped. A purchased pack is never capped: someone
+ * who buys two Action Packs must receive all 200 credits, whereas unused
+ * subscription accrual is exactly the liability the cap exists to bound.
+ * @param {object} account  account document with cycleBalance / packBalance
+ * @param {{amount: number, bucket: string, cap?: number|null}} opts
+ *        credits to add, which bucket ('cycle' | 'pack'), and the cycle ceiling
+ *        (null = uncapped)
+ * @returns {{granted: number, forfeited: number, cycleDelta: number, packDelta: number, balanceAfter: number}}
+ *          deltas are POSITIVE; `forfeited` is what the cap turned away
+ */
+function planCredit(account, { amount, bucket = 'pack', cap = null } = {}) {
+  const cycle = Math.max(0, account?.cycleBalance || 0);
+  const pack = Math.max(0, account?.packBalance || 0);
+  const want = Math.max(0, Math.floor(amount || 0));
+
+  if (bucket === 'cycle') {
+    const room = cap == null ? want : Math.max(0, cap - cycle);
+    const granted = Math.min(want, room);
+    return {
+      granted,
+      forfeited: want - granted,
+      cycleDelta: granted,
+      packDelta: 0,
+      balanceAfter: cycle + granted + pack
+    };
+  }
+  return {
+    granted: want,
+    forfeited: 0,
+    cycleDelta: 0,
+    packDelta: want,
+    balanceAfter: cycle + pack + want
+  };
 }
 
 /**
@@ -132,6 +215,11 @@ function newAccount(user, grant, ts) {
     acceptedAt: null,
     lifetimeGranted: grant,
     lifetimeSpent: 0,
+    // Purchased credits are counted separately from `lifetimeGranted` on
+    // purpose: grantIssued() treats a positive lifetimeGranted as "the free
+    // grant was already paid out", so folding purchases into it would rob a
+    // buyer of a free grant they had not yet received.
+    lifetimePurchased: 0,
     // Idempotency marker for the one-time free grant. False when the account was
     // created before the address was verified — ensureAccount issues the grant on
     // a later call, once Firebase reports email_verified.
@@ -197,6 +285,10 @@ function publicAccount(account, user) {
     cycleBalance: Math.max(0, account.cycleBalance || 0),
     packBalance: Math.max(0, account.packBalance || 0),
     subscriptionStatus: account.subscriptionStatus,
+    // Whether a Stripe customer exists, so the UI can show "Manage billing"
+    // only to someone who has actually bought something. A boolean, not the
+    // customer id — the browser has no use for the id itself.
+    hasBilling: !!account.stripeCustomerId,
     acceptedTerms: !!account.acceptedTerms
   };
 }
@@ -343,6 +435,87 @@ function createCredits(db, opts = {}) {
   }
 
   /**
+   * Add purchased credits to an account, exactly once per Stripe event.
+   *
+   * Idempotency is the whole point: Stripe delivers webhooks at-least-once and
+   * retries anything that is not a prompt 2xx, so a slow response or a Cloud Run
+   * cold start can replay a delivery that already succeeded. The event id is
+   * read and written inside the same transaction as the balance change, so a
+   * duplicate is detected atomically and a concurrent duplicate loses the
+   * transaction and retries into the "already seen" branch.
+   *
+   * Cycle grants are capped (see rolloverCap); pack purchases never are.
+   * @param {string} uid  the verified Firebase uid the payment belongs to
+   * @param {{amount: number, bucket?: string, reason?: string, eventId: string, ref?: string|null, cap?: number|null}} opts
+   *        credits to add, target bucket ('cycle' | 'pack'), ledger reason, the
+   *        Stripe event id (required), an optional reference (price/session id),
+   *        and the cycle ceiling
+   * @returns {Promise<{duplicate: boolean, granted: number, forfeited: number, balanceAfter: number|null}>}
+   *          the grant receipt; `duplicate: true` means this event was already
+   *          applied and nothing changed
+   * @throws {UnknownAccountError}  when no account document exists for the uid
+   */
+  async function addCredits(uid, { amount, bucket = 'pack', reason = 'purchase', eventId, ref = null, cap = null } = {}) {
+    if (!eventId) throw new Error('addCredits requires a Stripe event id for idempotency');
+
+    const accRef = db.collection(ACCOUNTS).doc(uid);
+    const eventRef = db.collection(STRIPE_EVENTS).doc(eventId);
+    const ledgerRef = db.collection(LEDGER).doc();
+
+    return db.runTransaction(async (tx) => {
+      // All reads first — Firestore forbids a read after a write in a transaction.
+      const seen = await tx.get(eventRef);
+      if (seen.exists) {
+        return { duplicate: true, granted: 0, forfeited: 0, balanceAfter: null };
+      }
+      const snap = await tx.get(accRef);
+      if (!snap.exists) throw new UnknownAccountError(uid);
+
+      const account = snap.data();
+      const ts = now();
+      const plan = planCredit(account, { amount, bucket, cap });
+
+      // Written even when the cap grants 0, so a replay of this event still
+      // short-circuits above instead of re-running the arithmetic.
+      tx.set(eventRef, {
+        uid,
+        eventId,
+        reason,
+        granted: plan.granted,
+        forfeited: plan.forfeited,
+        ref,
+        createdAt: ts
+      });
+
+      tx.update(accRef, {
+        cycleBalance: Math.max(0, account.cycleBalance || 0) + plan.cycleDelta,
+        packBalance: Math.max(0, account.packBalance || 0) + plan.packDelta,
+        lifetimePurchased: (account.lifetimePurchased || 0) + plan.granted,
+        updatedAt: ts
+      });
+
+      tx.set(ledgerRef, {
+        uid,
+        delta: plan.granted,
+        reason,
+        bucket,
+        // Recorded so support can answer "I paid for 20, why did I get 5?"
+        forfeited: plan.forfeited,
+        balanceAfter: plan.balanceAfter,
+        ref,
+        createdAt: ts
+      });
+
+      return {
+        duplicate: false,
+        granted: plan.granted,
+        forfeited: plan.forfeited,
+        balanceAfter: plan.balanceAfter
+      };
+    });
+  }
+
+  /**
    * Reverse a charge, returning credits to the exact buckets they came from (so
    * a refunded subscription credit does not silently become a non-expiring one).
    * Best-effort by contract: callers use it on the failure path and must not let
@@ -381,7 +554,80 @@ function createCredits(db, opts = {}) {
     });
   }
 
-  return { ensureAccount, getAccount, debit, refund };
+  /**
+   * Record subscription lifecycle state. Touches NO balance, ever.
+   *
+   * Subscription credits roll over and are permanent, so a cancellation is a
+   * status change and nothing more — clawing credits back on cancel would take
+   * away something the user already paid for.
+   * @param {string} uid  the verified Firebase uid
+   * @param {{subscriptionId?: string|null, status?: string|null, plan?: string|null, customerId?: string|null}} opts
+   *        the Stripe subscription id, its status, an optional plan label, and
+   *        the customer id to backfill if the account has none
+   * @returns {Promise<object|null>}  the applied patch, or null when no account exists
+   */
+  async function setSubscription(uid, { subscriptionId = null, status = null, plan = null, customerId = null } = {}) {
+    const accRef = db.collection(ACCOUNTS).doc(uid);
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(accRef);
+      if (!snap.exists) return null;
+      const existing = snap.data();
+      const patch = { updatedAt: now() };
+      if (subscriptionId !== null) patch.stripeSubscriptionId = subscriptionId;
+      if (status !== null) patch.subscriptionStatus = status;
+      if (plan !== null) patch.plan = plan;
+      // Backfill only — never overwrite an existing customer id, which would
+      // orphan the reverse lookup used to resolve uid from a webhook.
+      if (customerId && !existing.stripeCustomerId) patch.stripeCustomerId = customerId;
+      tx.update(accRef, patch);
+      return patch;
+    });
+  }
+
+  /**
+   * Bind a Stripe customer id to an account, without overwriting an existing one.
+   *
+   * Overwriting would orphan the reverse lookup a webhook falls back on, and
+   * would leave the old customer's subscriptions pointing at nothing — so a
+   * concurrent second checkout keeps whichever id was written first.
+   * @param {string} uid  the verified Firebase uid
+   * @param {string} customerId  the Stripe customer id
+   * @returns {Promise<string|null>}  the customer id now on the account (which
+   *          may be a pre-existing one), or null when no account exists
+   */
+  async function attachCustomer(uid, customerId) {
+    if (!customerId) return null;
+    const accRef = db.collection(ACCOUNTS).doc(uid);
+    return db.runTransaction(async (tx) => {
+      const snap = await tx.get(accRef);
+      if (!snap.exists) return null;
+      const existing = snap.data().stripeCustomerId;
+      if (existing) return existing;
+      tx.update(accRef, { stripeCustomerId: customerId, updatedAt: now() });
+      return customerId;
+    });
+  }
+
+  /**
+   * Reverse-resolve a Stripe customer id to the account that owns it. Used when
+   * a webhook payload carries no uid metadata (e.g. a subscription created
+   * outside our checkout flow, or by an older build).
+   * @param {string} customerId  the Stripe customer id
+   * @returns {Promise<string|null>}  the uid, or null when no account matches
+   */
+  async function uidByCustomer(customerId) {
+    if (!customerId) return null;
+    const snap = await db.collection(ACCOUNTS)
+      .where('stripeCustomerId', '==', customerId)
+      .limit(1)
+      .get();
+    return snap.empty ? null : snap.docs[0].data().uid || snap.docs[0].id;
+  }
+
+  return {
+    ensureAccount, getAccount, debit, refund,
+    addCredits, setSubscription, attachCustomer, uidByCustomer
+  };
 }
 
 module.exports = {
@@ -389,13 +635,18 @@ module.exports = {
   creditCost,
   totalBalance,
   planDebit,
+  planCredit,
+  rolloverCap,
   newAccount,
   grantIssued,
   profilePatch,
   publicAccount,
   InsufficientCreditsError,
+  UnknownAccountError,
   CREDIT_COSTS,
   FREE_CREDIT_GRANT,
+  ROLLOVER_MULTIPLIER,
   ACCOUNTS,
-  LEDGER
+  LEDGER,
+  STRIPE_EVENTS
 };

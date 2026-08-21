@@ -7,10 +7,13 @@ const express = require('express');
 const cors = require('cors');
 const { Firestore } = require('@google-cloud/firestore');
 const Anthropic = require('@anthropic-ai/sdk');
+const Stripe = require('stripe');
 const prompts = require('./lib/prompts');
 const { buildLimiters } = require('./lib/rateLimit');
 const auth = require('./lib/auth');
 const creditsLib = require('./lib/credits');
+const plansLib = require('./lib/plans');
+const stripeEvents = require('./lib/stripeEvents');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -183,9 +186,39 @@ let credits = creditsLib.createCredits(db);
 // count with TRUST_PROXY_HOPS if the platform inserts more proxies.
 app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 
+// ── Stripe webhook (MUST be mounted before express.json) ──
+// Signature verification hashes the EXACT bytes Stripe sent. Any body parser
+// that runs first replaces the raw Buffer with a parsed object and the
+// signature can never validate again — so this route is registered above the
+// JSON parser on purpose. Moving it below silently breaks every webhook.
+//
+// It also sits OUTSIDE /api/, which keeps it clear of the per-IP rate limiters
+// mounted there: throttling Stripe would turn a retry burst into 429s, and
+// Stripe eventually disables an endpoint that keeps failing.
+app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhookHandler);
+
 app.use(express.json({ limit: '2mb' }));
+/**
+ * Parse ALLOWED_ORIGIN into a value the `cors` package accepts.
+ *
+ * A LIST, not a single string, because one deployment legitimately answers on
+ * several origins: Cloud Run serves every service on two URL formats
+ * (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`),
+ * and a custom domain adds a third. With only one configured, a browser on any
+ * other one gets a preflight whose Allow-Origin does not match, silently drops
+ * the real request, and the app looks broken with nothing in the server logs
+ * but an OPTIONS 204.
+ * @param {string|undefined} raw  comma-separated origins, or '*'
+ * @returns {string|string[]}  '*' when unset or wildcarded, else the origin list
+ */
+function parseAllowedOrigins(raw) {
+  const list = String(raw || '*').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length === 0 || list.includes('*') ? '*' : list;
+}
+const ALLOWED_ORIGINS = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || '*',
+  origin: ALLOWED_ORIGINS,
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   // The billed routes report the post-debit balance in a header so the UI can
@@ -229,6 +262,121 @@ function billableAllowed(req, res, kind) {
     code: 'email_unverified'
   });
   return false;
+}
+
+// ── Stripe ─────────────────────────────────────────────
+// `let` (not const) so tests can inject a mock client via __setStripe below.
+// Both values come from Secret Manager in production; absent locally, the
+// billing routes stay dormant and the rest of the app is unaffected.
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+let stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+
+/**
+ * Handle a Stripe webhook delivery: verify the signature, interpret the event,
+ * and apply it to the account.
+ *
+ * Status-code contract, which is really a retry contract — Stripe retries any
+ * non-2xx with backoff and eventually disables an endpoint that keeps failing:
+ *   - 400 → the signature did not verify. Not from Stripe (or the wrong secret);
+ *           retrying cannot help, and answering 200 would invite forgeries.
+ *   - 200 → handled, OR permanently unactionable (unknown event type, no uid,
+ *           no credit metadata). Retrying these forever achieves nothing, so we
+ *           log loudly and ack.
+ *   - 500 → transient (Firestore unavailable). We WANT Stripe to retry, and
+ *           addCredits() is idempotent per event id, so a retry is safe.
+ * @param {import('express').Request} req   raw-body request (see the mount site)
+ * @param {import('express').Response} res  the response
+ * @returns {Promise<void>}  responds directly; side effects: Firestore writes
+ */
+async function stripeWebhookHandler(req, res) {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    console.error('Stripe webhook received but STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET are not configured');
+    return res.status(500).json({ error: 'Stripe not configured' });
+  }
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers['stripe-signature'],
+      STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('Stripe signature verification failed:', err.message);
+    return res.status(400).json({ error: 'Invalid signature' });
+  }
+
+  const intent = stripeEvents.intentFromEvent(event);
+  if (!intent) return res.json({ received: true, ignored: event.type });
+
+  try {
+    // The uid rides on metadata we stamp at checkout; the customer lookup covers
+    // anything created outside that flow (or by an older build).
+    const uid = intent.uid || await credits.uidByCustomer(intent.customerId);
+    if (!uid) {
+      console.error('Stripe webhook could not resolve a uid:', event.type, event.id, intent.customerId);
+      return res.json({ received: true, unresolved: true });
+    }
+
+    if (intent.kind === 'subscription') {
+      await credits.setSubscription(uid, {
+        subscriptionId: intent.subscriptionId,
+        status: intent.status,
+        customerId: intent.customerId
+      });
+      return res.json({ received: true, uid, status: intent.status });
+    }
+
+    // kind === 'grant'
+    const plan = intent.credits == null ? await plansLib.planById(stripe, intent.priceId) : null;
+    const perUnit = intent.credits ?? plan?.credits ?? 0;
+    if (perUnit <= 0) {
+      // A price with no `credits` metadata is a catalog problem, not a transient
+      // one — the customer paid, so this needs a human, not a retry loop.
+      console.error('Stripe payment with no resolvable credits:', event.id, intent.priceId);
+      return res.json({ received: true, unresolved: true });
+    }
+
+    const amount = plansLib.scaleCredits(perUnit, intent.quantity);
+    const receipt = await credits.addCredits(uid, {
+      amount,
+      bucket: intent.bucket,
+      reason: intent.reason,
+      eventId: event.id,
+      ref: intent.ref,
+      // Only subscription accrual is capped (see credits.rolloverCap).
+      cap: intent.bucket === 'cycle' ? creditsLib.rolloverCap(amount) : null
+    });
+
+    // Keep plan/status current off the same payment, so an active subscriber is
+    // never shown as inactive just because the lifecycle event arrived first.
+    //
+    // Skipped on a duplicate: a redelivery of an old invoice.paid carries no new
+    // information, and writing 'active' from it would resurrect a subscription
+    // that has since been cancelled.
+    if (intent.subscriptionId && !receipt.duplicate) {
+      await credits.setSubscription(uid, {
+        subscriptionId: intent.subscriptionId,
+        status: 'active',
+        plan: plan?.name || null,
+        customerId: intent.customerId
+      });
+    }
+
+    console.log('Stripe grant:', {
+      event: event.id, type: event.type, uid,
+      granted: receipt.granted, forfeited: receipt.forfeited, duplicate: receipt.duplicate
+    });
+    return res.json({ received: true, granted: receipt.granted, duplicate: receipt.duplicate });
+  } catch (err) {
+    if (err instanceof creditsLib.UnknownAccountError) {
+      console.error('Stripe payment for a uid with no account:', event.id, err.uid);
+      return res.json({ received: true, unresolved: true });
+    }
+    // Transient — let Stripe retry into the idempotent path.
+    console.error('Stripe webhook error:', event.type, event.id, err);
+    return res.status(500).json({ error: 'Webhook handling failed' });
+  }
 }
 
 // ── Health check ───────────────────────────────────────
@@ -487,6 +635,155 @@ app.post('/api/account', auth.requireAuth(), async (req, res) => {
   }
 });
 
+// ── Billing (Stripe Checkout + Customer Portal) ────────
+/**
+ * Resolve the single public URL Stripe sends the browser back to.
+ *
+ * Deliberately NOT derived from the request's Origin/Referer: those are
+ * attacker-controllable, and a redirect target built from them is an open
+ * redirect wearing a Stripe URL.
+ *
+ * Takes only the FIRST entry when falling back to ALLOWED_ORIGIN, because that
+ * variable is a LIST (one deployment answers on several origins) while a
+ * redirect target must be exactly one URL. Concatenating the list produced
+ * `https://a,https://b/?checkout=success`, which is not a reachable address.
+ * Trailing slashes are trimmed so callers can append `/?...` unambiguously.
+ * @param {string|undefined} appUrl   explicit APP_URL, if set
+ * @param {string|undefined} allowed  ALLOWED_ORIGIN (may be a list, or '*')
+ * @returns {string}  one origin with no trailing slash
+ */
+function resolveAppUrl(appUrl, allowed) {
+  const first = (v) => String(v || '').split(',')[0].trim().replace(/\/+$/, '');
+  const explicit = first(appUrl);
+  if (explicit) return explicit;
+  const fallback = first(allowed);
+  if (fallback && fallback !== '*') return fallback;
+  return 'http://localhost:8080';
+}
+const APP_URL_FALLBACK = 'http://localhost:8080';
+const APP_URL = resolveAppUrl(process.env.APP_URL, process.env.ALLOWED_ORIGIN);
+// Both APP_URL and ALLOWED_ORIGIN are optional, so a deploy that sets neither
+// silently sends paying customers to localhost after checkout. Treat that as a
+// misconfiguration in production rather than a default worth honouring.
+const APP_URL_CONFIGURED = APP_URL !== APP_URL_FALLBACK;
+if (!APP_URL_CONFIGURED && process.env.NODE_ENV === 'production') {
+  console.error(
+    'CONFIG ERROR: neither APP_URL nor a concrete ALLOWED_ORIGIN is set. ' +
+    'Stripe checkout would return buyers to ' + APP_URL_FALLBACK + ', so /api/billing/* is disabled.'
+  );
+}
+
+/**
+ * The purchasable catalog, resolved live from Stripe.
+ *
+ * Public on purpose — prices are public information and the plan picker should
+ * render before a sign-in prompt. The blanket /api/ rate limiter is the abuse
+ * backstop; there is no cache, because both services are stateless by design.
+ */
+app.get('/api/billing/plans', async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Billing is not configured' });
+  try {
+    res.json({ plans: await plansLib.listCatalog(stripe) });
+  } catch (err) {
+    console.error('Plans error:', err);
+    res.status(502).json({ error: 'Could not load plans' });
+  }
+});
+
+/**
+ * Start a Stripe Checkout session for the signed-in user.
+ *
+ * The client sends ONLY a price id — never an amount, a credit count, or a
+ * plan name. The server re-resolves everything from Stripe, so a tampered body
+ * can at most select a different real product at its real price.
+ *
+ * Verification is required here even though it costs nothing, because
+ * billableAllowed() refuses cost>0 work from an unverified account: without
+ * this gate a user could buy 100 credits and then be refused every audit.
+ * Gating the purchase instead means anyone holding credits is verified by
+ * construction, with no extra state to track.
+ */
+app.post('/api/billing/checkout', auth.requireAuth(), async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Billing is not configured' });
+  // Refusing the sale beats taking the money and stranding the buyer on a dead
+  // localhost page — the webhook would still grant the credits, so they would be
+  // charged, credited, and shown nothing.
+  if (!APP_URL_CONFIGURED && process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ error: 'Billing is not configured', code: 'app_url_unset' });
+  }
+  if (!req.user.emailVerified) {
+    return res.status(403).json({ error: 'Email verification required', code: 'email_unverified' });
+  }
+
+  try {
+    const account = await credits.ensureAccount(req.user);
+    const plan = await plansLib.planById(stripe, req.body?.priceId);
+    if (!plan) return res.status(400).json({ error: 'Unknown or unavailable plan' });
+
+    // Reuse the account's customer so a returning buyer keeps one billing
+    // history (and one portal session) rather than accumulating duplicates.
+    let customerId = account.stripeCustomerId;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: req.user.email || undefined,
+        metadata: { uid: req.user.uid }
+      });
+      // attachCustomer returns whatever id ends up on the account, so a
+      // concurrent second checkout converges on one customer.
+      customerId = await credits.attachCustomer(req.user.uid, customer.id) || customer.id;
+    }
+
+    const subscription = plan.bucket === 'cycle';
+    const stamp = { uid: req.user.uid, credits: String(plan.credits), priceId: plan.priceId, quantity: '1' };
+
+    const session = await stripe.checkout.sessions.create({
+      mode: subscription ? 'subscription' : 'payment',
+      customer: customerId,
+      line_items: [{ price: plan.priceId, quantity: 1 }],
+      // client_reference_id is the canonical uid slot; metadata is the copy the
+      // webhook reads when resolving a one-time purchase.
+      client_reference_id: req.user.uid,
+      metadata: stamp,
+      // Renewal invoices carry subscription metadata, not session metadata, so
+      // the uid must be stamped here too or month two cannot be attributed.
+      ...(subscription ? { subscription_data: { metadata: { uid: req.user.uid, credits: String(plan.credits) } } } : {}),
+      // {CHECKOUT_SESSION_ID} is a Stripe template token — it must reach Stripe
+      // literally, so do not URL-encode or interpolate it.
+      success_url: `${APP_URL}/?checkout=success&session={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${APP_URL}/?checkout=cancelled`
+    });
+
+    res.json({ url: session.url, priceId: plan.priceId, credits: plan.credits });
+  } catch (err) {
+    console.error('Checkout error:', err);
+    res.status(502).json({ error: 'Could not start checkout' });
+  }
+});
+
+/**
+ * Open the Stripe Customer Portal so a subscriber can update their card or
+ * cancel without contacting us. Required for a subscription product, not
+ * optional. Needs the portal to be configured once in the Stripe dashboard
+ * (Settings → Billing → Customer portal) or Stripe rejects the call.
+ */
+app.post('/api/billing/portal', auth.requireAuth(), async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Billing is not configured' });
+  try {
+    const account = await credits.getAccount(req.user.uid);
+    if (!account?.stripeCustomerId) {
+      return res.status(404).json({ error: 'No billing history yet', code: 'no_customer' });
+    }
+    const session = await stripe.billingPortal.sessions.create({
+      customer: account.stripeCustomerId,
+      return_url: `${APP_URL}/`
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Portal error:', err);
+    res.status(502).json({ error: 'Could not open the billing portal' });
+  }
+});
+
 // ── Save audit ─────────────────────────────────────────
 app.post('/api/audits', async (req, res) => {
   const { audit } = req.body;
@@ -604,6 +901,8 @@ module.exports.withRetry = withRetry;
 module.exports.isRetryable = isRetryable;
 module.exports.clampInt = clampInt;
 module.exports.promptSize = promptSize;
+module.exports.parseAllowedOrigins = parseAllowedOrigins;
+module.exports.resolveAppUrl = resolveAppUrl;
 module.exports.LIMITS = LIMITS;
 // Test-only: inject a fake Firebase ID-token verifier so the auth middleware can
 // be exercised without a live Firebase project. Never called in prod.
@@ -614,3 +913,6 @@ module.exports.__setAnthropic = (client) => { anthropic = client; };
 // Test-only: inject a fake credit store so the billed routes can be tested
 // without Firestore. Pass null to restore the real one. Never called in prod.
 module.exports.__setCredits = (fake) => { credits = fake || creditsLib.createCredits(db); };
+// Test-only: inject a mock Stripe client so the webhook route can be tested
+// without live keys. Never called in prod.
+module.exports.__setStripe = (client) => { stripe = client; };

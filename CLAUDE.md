@@ -17,7 +17,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
   - All app state lives in module-level JS variables in the inline `<script>`. Persistence is via `localStorage` (user ID + offline cache) and the backend (`/api/audits`).
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`, `express-rate-limit` (per-route rate limiting), `firebase-admin` (ID-token verification for auth).
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
-- **Storage:** Firestore Native, five collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), `registrations` (append-only splash-registration leads), `accounts` (uid-keyed; authoritative credit balance + profile), and `credit_ledger` (append-only record of every balance change).
+- **Storage:** Firestore Native, six collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), `registrations` (append-only splash-registration leads), `accounts` (uid-keyed; authoritative credit balance + profile), `credit_ledger` (append-only record of every balance change), and `stripe_events` (processed Stripe event ids; the idempotency guard for webhook redelivery).
 - **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** as a single gated pipeline at `.github/workflows/pipeline.yml` (PRs run tests + CodeQL + Docker build; merge to `main` re-runs them and then deploys, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflow is the reference path, not a hard dependency.
 
 ---
@@ -244,7 +244,11 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Electability Rating (`task: 'electability'`) | **Free** — it runs automatically for candidates, so a charge would be a surprise |
 | Free, no account | Manual scoring, saved audits, compare, share links |
 
-**Two buckets, not one balance.** `cycleBalance` holds subscription credits (expire each cycle); `packBalance` holds purchased packs and the free grant (never expire). Debits spend `cycleBalance` **first**, and `refund()` returns credits to the exact bucket they came from so a refunded expiring credit never silently becomes a permanent one.
+**Two buckets, not one balance.** `cycleBalance` holds subscription credits; `packBalance` holds purchased packs and the free grant. **Neither expires** — subscription credits roll over and accumulate, capped at `ROLLOVER_MULTIPLIER` (3) × the plan's monthly allowance, so the promise "you don't lose what you paid for" holds without an unbounded liability. Debits spend `cycleBalance` **first** (no longer load-bearing without expiry, but it preserves refund symmetry), and `refund()` returns credits to the exact bucket they came from.
+
+Because subscription credits are permanent, **cancelling a subscription must never zero a balance** — the user paid for those credits. Subscription webhook events update `plan` / `subscriptionStatus` only.
+
+**Purchases are idempotent per Stripe event.** `addCredits()` reads and writes `stripe_events/{event.id}` inside the same transaction as the balance change, so an at-least-once redelivery (a slow response, a cold start) cannot credit twice. Purchased credits accumulate in `lifetimePurchased`, deliberately **not** `lifetimeGranted` — `grantIssued()` reads the latter as "the free grant was already paid out", so folding purchases in would rob a buyer of a free grant they had not yet received.
 
 **Reserve-then-refund, not charge-on-success.** The debit happens *before* the Anthropic call and is reversed if it throws. Charging after success would let concurrent requests all pass the same balance check and overspend. The tradeoff — a crash between debit and refund costs one credit — is recoverable via the `credit_ledger` row, which carries the subject as `ref`.
 
@@ -298,7 +302,7 @@ anthropic.messages.stream({
 | `REGISTRATION_FROM`     | no      | Resend `from` sender. Defaults to the `onboarding@resend.dev` sandbox (delivers only to the Resend account owner) — **set this to a verified domain sender (e.g. `Root & Fruit <noreply@rootandfruit.app>`) in production.** |
 | `DONATION_URL`          | no      | Donation CTA link in the registrant auto-reply email. If unset, the auto-reply omits the donation line entirely (rather than shipping a placeholder). Set to the live donation URL (e.g. `https://anvilinstitute.org/give`) in production. |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
-| `ALLOWED_ORIGIN`        | no      | CORS origin allowlist. Defaults to `*`.                                                      |
+| `ALLOWED_ORIGIN`        | no      | CORS origin allowlist — a **comma-separated list**. Defaults to `*`. Cloud Run serves each service on two URL formats (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`); listing only one means a browser on the other has its preflight rejected and its real request silently dropped. |
 | `RATE_LIMIT_AI`         | no      | Max `/api/analyze` + `/api/search` requests per window per client IP. Defaults to `15`.       |
 | `RATE_LIMIT_REGISTER`   | no      | Max `/api/register` requests per window per client IP. Defaults to `5`.                       |
 | `RATE_LIMIT_API`        | no      | Blanket cap over the rest of `/api/*` per window per client IP. Defaults to `100`.           |
@@ -306,6 +310,10 @@ anthropic.messages.stream({
 | `TRUST_PROXY_HOPS`      | no      | Proxy hops to trust for client-IP resolution behind the LB. Defaults to `1` (Cloud Run).    |
 | `FIREBASE_PROJECT_ID`   | no      | Firebase project for auth ID-token verification. Falls back to `GOOGLE_CLOUD_PROJECT`. If neither resolves, auth is disabled and every request is anonymous. |
 | `FREE_CREDITS`          | no      | One-time credit grant issued when an account's address is first seen verified. Defaults to `3`. Set to `0` to disable the free tier entirely. Forwarded by the pipeline from the optional `FREE_CREDITS` repo/Environment variable. |
+| `STRIPE_SECRET_KEY`     | no      | Enables `/api/billing/*` and the webhook. Absent → those routes answer 503 and the rest of the app is unaffected. Mount from Secret Manager (`stripe-secret-key:latest`); use a **test-mode** key outside production. |
+| `STRIPE_WEBHOOK_SECRET` | no      | Signing secret for `/webhooks/stripe`. Must come from the dashboard endpoint for **this environment's backend URL** — a `stripe listen` secret only signs locally-relayed events. Store with `printf '%s'`; a trailing newline breaks HMAC verification. |
+| `APP_URL`               | no      | Public frontend URL Stripe redirects back to after checkout. Falls back to the **first** entry of `ALLOWED_ORIGIN`; if neither is set, billing routes are disabled in production rather than returning buyers to `localhost`. |
+| `MAX_CREDIT_GRANT`      | no      | Hard ceiling on a single credit grant, whatever a price's metadata claims. Defaults to `1000` — the guard that stops a dashboard typo minting a fortune. |
 | `PORT`                  | no      | Cloud Run injects it. Defaults to 8080 locally.                                              |
 
 | Frontend env var        | Required | Notes                                                                                        |
@@ -351,7 +359,13 @@ Deployment targets **two stateless containers** (`root-and-fruit-backend`, `root
 
 The non-negotiable wiring:
 
-1. Provision a Firestore (or Firestore-compatible) database. The app uses five collections: `audits`, `shared_audits`, `registrations`, `accounts`, and `credit_ledger`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations` and `credit_ledger` are append-only and `accounts` is read by document id, so none of them need an index today (a ledger listing UI would need `(uid ASC, createdAt DESC)`).
+1. Provision a Firestore (or Firestore-compatible) database. The app uses six collections: `audits`, `shared_audits`, `registrations`, `accounts`, `credit_ledger`, and `stripe_events`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations`, `credit_ledger`, and `stripe_events` are append-only, and `accounts` is read by document id, so none of them need an index today (a ledger listing UI would need `(uid ASC, createdAt DESC)`). The webhook does query `accounts` by `stripeCustomerId`, which Firestore's automatic single-field index already covers.
+
+**Stripe prerequisites (per project, before the first deploy that mounts them).** Secret Manager secrets are project-scoped, so **dev and prod each need their own** `stripe-secret-key` and `stripe-webhook-secret` — with test-mode values in dev and live-mode values in prod. Both deploy jobs pass them via `--set-secrets`, so a missing secret **fails the deploy**. Gotchas that cost real debugging time:
+- Store values with `printf '%s'`, never `echo` or a bare `jq -r` pipe — a trailing newline is invisible in the console and makes webhook signature verification fail with "No signatures found matching the expected signature".
+- The `whsec_` value comes from the **dashboard webhook endpoint for that environment's backend URL**, not from `stripe listen` (which only signs events relayed through a local CLI session).
+- Grants differ per project: dev has a project-level `secretmanager.secretAccessor` binding, prod grants **per secret** — a new secret there is unreadable until explicitly bound.
+- Every Stripe **product** needs `metadata.credits` (or no credits are granted after a successful charge) and, when Managed Payments is enabled, a `tax_code` (or checkout 400s outright).
 2. Deploy the **backend** first. It needs `ANTHROPIC_API_KEY` (from a secret store, never a plaintext env), service-account credentials with Firestore read/write, and `GOOGLE_CLOUD_PROJECT` (or equivalent) for the Firestore client. Long-running AI requests can take tens of seconds — set the platform's request timeout to ≥ 300s.
 3. Deploy the **frontend** with `BACKEND_URL` pointing at the backend's public URL. The frontend image carries no build-time config — `BACKEND_URL` is read at request time and injected into HTML via `frontend/server.js`.
 4. (Optional) Tighten CORS by setting `ALLOWED_ORIGIN` on the backend to the frontend's public URL.

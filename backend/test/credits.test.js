@@ -15,8 +15,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  createCredits, creditCost, totalBalance, planDebit, profilePatch,
-  publicAccount, grantIssued, InsufficientCreditsError, CREDIT_COSTS, FREE_CREDIT_GRANT
+  createCredits, creditCost, totalBalance, planDebit, planCredit, rolloverCap, profilePatch,
+  publicAccount, grantIssued, InsufficientCreditsError, UnknownAccountError,
+  CREDIT_COSTS, FREE_CREDIT_GRANT, ROLLOVER_MULTIPLIER
 } = require('../lib/credits');
 
 // ── Fake Firestore ─────────────────────────────────────
@@ -374,4 +375,173 @@ test('refund: debit + refund round-trips the balance exactly', async () => {
 
   const rows = [...store.values()].filter((v) => v.reason);
   assert.deepEqual(rows.map((r) => r.reason).sort(), ['analyze', 'free_grant', 'refund']);
+});
+
+/**
+ * Pull just the credit_ledger documents out of a fake store. Needed because the
+ * stripe_events doc carries a `reason` too, so filtering on field values alone
+ * would match it as well as the ledger row.
+ * @param {Map} store  the fake Firestore backing map
+ * @returns {object[]}  the ledger documents
+ */
+function ledgerRows(store) {
+  return [...store.entries()].filter(([k]) => k.startsWith('credit_ledger/')).map(([, v]) => v);
+}
+
+// ── Pure: rollover cap ─────────────────────────────────
+test('rolloverCap: three times the monthly allowance', () => {
+  assert.equal(ROLLOVER_MULTIPLIER, 3, 'product decision — pin it against a silent refactor');
+  assert.equal(rolloverCap(20), 60);
+  assert.equal(rolloverCap(100), 300);
+  assert.equal(rolloverCap(0), 0);
+  assert.equal(rolloverCap(undefined), 0);
+});
+
+// ── Pure: planCredit ───────────────────────────────────
+test('planCredit: a purchased pack is never capped', () => {
+  // Two Action Packs must deliver all 200 credits — the cap is only ever about
+  // unused subscription accrual.
+  const plan = planCredit({ cycleBalance: 0, packBalance: 100 }, { amount: 100, bucket: 'pack', cap: 60 });
+  assert.equal(plan.granted, 100);
+  assert.equal(plan.forfeited, 0);
+  assert.equal(plan.packDelta, 100);
+  assert.equal(plan.cycleDelta, 0);
+  assert.equal(plan.balanceAfter, 200);
+});
+
+test('planCredit: a subscription top-up fills to the cap and forfeits the rest', () => {
+  // Organizer at 20/mo caps at 60; sitting on 55 leaves room for only 5.
+  const plan = planCredit({ cycleBalance: 55, packBalance: 3 }, { amount: 20, bucket: 'cycle', cap: rolloverCap(20) });
+  assert.equal(plan.granted, 5);
+  assert.equal(plan.forfeited, 15);
+  assert.equal(plan.cycleDelta, 5);
+  assert.equal(plan.balanceAfter, 63, 'pack credits are untouched by the cycle cap');
+});
+
+test('planCredit: a subscription top-up at the cap grants nothing', () => {
+  const plan = planCredit({ cycleBalance: 60, packBalance: 0 }, { amount: 20, bucket: 'cycle', cap: 60 });
+  assert.equal(plan.granted, 0);
+  assert.equal(plan.forfeited, 20);
+  assert.equal(plan.balanceAfter, 60, 'never goes backwards');
+});
+
+test('planCredit: a null cap means uncapped', () => {
+  const plan = planCredit({ cycleBalance: 500, packBalance: 0 }, { amount: 20, bucket: 'cycle', cap: null });
+  assert.equal(plan.granted, 20);
+  assert.equal(plan.forfeited, 0);
+});
+
+// ── addCredits ─────────────────────────────────────────
+test('addCredits: credits a pack purchase and records the event + ledger row', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(USER);
+
+  const receipt = await credits.addCredits('u-1', {
+    amount: 10, bucket: 'pack', reason: 'pack_purchase',
+    eventId: 'evt_1', ref: 'price_community_10'
+  });
+
+  assert.equal(receipt.duplicate, false);
+  assert.equal(receipt.granted, 10);
+  assert.equal(receipt.balanceAfter, 15, '5 free + 10 purchased');
+  assert.equal(store.get('accounts/u-1').packBalance, 15);
+
+  const event = store.get('stripe_events/evt_1');
+  assert.equal(event.uid, 'u-1');
+  assert.equal(event.granted, 10);
+
+  const row = ledgerRows(store).find((v) => v.reason === 'pack_purchase');
+  assert.equal(row.delta, 10);
+  assert.equal(row.bucket, 'pack');
+  assert.equal(row.ref, 'price_community_10');
+});
+
+// Stripe delivers at-least-once and retries anything that is not a prompt 2xx,
+// so this is the test that stands between a cold start and a double credit.
+test('addCredits: a replayed Stripe event is a no-op', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(USER);
+
+  await credits.addCredits('u-1', { amount: 10, bucket: 'pack', eventId: 'evt_1' });
+  const replay = await credits.addCredits('u-1', { amount: 10, bucket: 'pack', eventId: 'evt_1' });
+
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.granted, 0);
+  assert.equal(store.get('accounts/u-1').packBalance, 15, 'still 15, not 25');
+
+  assert.equal(ledgerRows(store).length, 2, 'the free grant + one purchase, not two purchases');
+});
+
+test('addCredits: distinct events each apply — idempotency is per event, not per uid', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(USER);
+
+  await credits.addCredits('u-1', { amount: 10, bucket: 'pack', eventId: 'evt_1' });
+  await credits.addCredits('u-1', { amount: 10, bucket: 'pack', eventId: 'evt_2' });
+
+  assert.equal(store.get('accounts/u-1').packBalance, 25, '5 free + 10 + 10');
+});
+
+test('addCredits: a subscription renewal rolls over up to 3x the allowance', async () => {
+  const { credits, store } = build({
+    'accounts/u-1': { uid: 'u-1', cycleBalance: 55, packBalance: 0, lifetimeSpent: 0, plan: 'organizer' }
+  });
+
+  const receipt = await credits.addCredits('u-1', {
+    amount: 20, bucket: 'cycle', reason: 'subscription_cycle',
+    eventId: 'evt_inv_1', cap: rolloverCap(20)
+  });
+
+  assert.equal(receipt.granted, 5);
+  assert.equal(receipt.forfeited, 15);
+  assert.equal(store.get('accounts/u-1').cycleBalance, 60, 'capped, not 75');
+
+  const row = ledgerRows(store).find((v) => v.reason === 'subscription_cycle');
+  assert.equal(row.delta, 5);
+  assert.equal(row.forfeited, 15, 'the forfeit is recorded so support can explain it');
+});
+
+test('addCredits: refuses to run without an event id', async () => {
+  const { credits } = build();
+  await credits.ensureAccount(USER);
+  await assert.rejects(
+    () => credits.addCredits('u-1', { amount: 10, bucket: 'pack' }),
+    /idempotency/
+  );
+});
+
+test('addCredits: an unknown uid throws instead of silently succeeding', async () => {
+  const { credits, store } = build();
+  await assert.rejects(
+    () => credits.addCredits('ghost', { amount: 10, bucket: 'pack', eventId: 'evt_1' }),
+    UnknownAccountError
+  );
+  assert.equal(store.get('stripe_events/evt_1'), undefined, 'a failed grant records nothing');
+});
+
+// grantIssued() reads lifetimeGranted as "the free grant was already paid out",
+// so a purchase must not touch it — otherwise buying credits before clicking the
+// verification link would silently cost the buyer their free grant.
+test('addCredits: a purchase does not consume the pending free grant', async () => {
+  const { credits, store } = build();
+  await credits.ensureAccount(UNVERIFIED);
+  await credits.addCredits('u-1', { amount: 10, bucket: 'pack', eventId: 'evt_1' });
+  assert.equal(store.get('accounts/u-1').packBalance, 10);
+  assert.equal(store.get('accounts/u-1').lifetimePurchased, 10);
+  assert.equal(store.get('accounts/u-1').lifetimeGranted, 0, 'purchases are counted separately');
+
+  await credits.ensureAccount(USER);
+  assert.equal(store.get('accounts/u-1').packBalance, 15, 'the free grant still lands after verifying');
+});
+
+test('addCredits + debit: subscription credits are spent before purchased ones', async () => {
+  const { credits, store } = build({
+    'accounts/u-1': { uid: 'u-1', cycleBalance: 0, packBalance: 4, lifetimeSpent: 0, plan: 'organizer' }
+  });
+  await credits.addCredits('u-1', { amount: 20, bucket: 'cycle', eventId: 'evt_1', cap: rolloverCap(20) });
+
+  await credits.debit('u-1', { kind: 'analyze' });
+  const acc = store.get('accounts/u-1');
+  assert.equal(acc.cycleBalance, 19);
+  assert.equal(acc.packBalance, 4, 'purchased credits untouched while subscription credits remain');
 });
