@@ -280,6 +280,15 @@ jobs:
         working-directory: frontend
         run: node test/report.mjs
 
+      # Guards the community-justification rule: once an AI baseline exists, a
+      # score moved away from it cannot be saved, shared, or exported without a
+      # written reason. Covers the cases the rule is easy to break — round-trips
+      # back to baseline, token answers, and manual-only audits (which have no
+      # baseline and so are never gated).
+      - name: Run community justification test
+        working-directory: frontend
+        run: node test/justifications.mjs
+
   # ── Build once: push SHA-tagged images to the shared registry ───────────
   # Runs on a push to any non-main branch (after the gates). Builds both images
   # on the runner and pushes them to the SHARED Artifact Registry repo tagged by

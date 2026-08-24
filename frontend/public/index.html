@@ -689,6 +689,11 @@
     transition: border-color 0.2s;
   }
   .justification-input:focus { outline: none; border-color: var(--gold); }
+  /* Required-but-unwritten. Deliberately a border + tint rather than a shout:
+     the point is to be noticed while editing, not to scold. */
+  .justification-input.missing { border-color: var(--red); background: rgba(192,57,43,0.05); }
+  .justification-input.missing:focus { border-color: var(--red); }
+  .justification-label.required { color: var(--red); }
   .justification-input::placeholder { color: var(--text-dimmer); font-style: italic; }
 
   .community-score-indicator {
@@ -2194,6 +2199,8 @@ function getCommunityDelta() {
 }
 
 function updateCommunityScoreIndicator() {
+  // Keeps the required/missing marks in step with the scores that drive them.
+  updateJustificationUI();
   const aiEl  = document.getElementById('csiAiScore');
   const comEl = document.getElementById('csiCommunityScore');
   const barAi = document.getElementById('csiBarAi');
@@ -2238,9 +2245,141 @@ function updateCommunityScoreIndicator() {
   }
 }
 
+// ── Community justifications: required when you change the AI's read ──
+// The rule: if you move a score away from the AI baseline, you say why. It only
+// applies once a baseline EXISTS — with no analysis run there is nothing to
+// deviate from, and every score is original work rather than a revision.
+const MIN_JUSTIFICATION = 20;
+
+// Section key → the textarea holding its justification, and the label shown in
+// error copy. Order matches the cards down the Community Assessment page, so
+// "first offender" scrolling lands on the topmost one.
+const JUSTIFY_FIELDS = [
+  { key: 'root',    input: 'justRoot',    label: 'Root' },
+  { key: 'branch',  input: 'justBranch',  label: 'Branches' },
+  { key: 'fruit',   input: 'justFruit',   label: 'Fruit' },
+  { key: 'vis',     input: 'justVis',     label: 'Light' },
+  { key: 'toxic',   input: 'justToxic',   label: 'Toxic Soil' },
+  { key: 'peoples', input: 'justPeoples', label: "People's Choice" }
+];
+
+/**
+ * Which sections has the user moved away from the AI baseline?
+ *
+ * A pure comparison against the snapshot captureBaseline() already stores, so
+ * round-trips resolve correctly for free: check a box and uncheck it and the
+ * section is no longer "adjusted".
+ * in:  none
+ * out: string[] — section keys (see JUSTIFY_FIELDS); empty when no baseline
+ *      exists, because then nothing counts as an adjustment
+ */
+function getAdjustedSections() {
+  if (!baselineScores) return [];
+  const changed = [];
+  const differs = (live, base) => live.some((v, i) => v !== base[i]);
+
+  if (differs(Array.from(rootCBs).map(c => c.checked),   baselineScores.rootVals   || [])) changed.push('root');
+  if (differs(Array.from(branchCBs).map(c => c.checked), baselineScores.branchVals || [])) changed.push('branch');
+  if (differs(Array.from(fruitSls).map(s => +s.value),   baselineScores.fruitVals  || [])) changed.push('fruit');
+  if (+visSlider.value !== baselineScores.vis) changed.push('vis');
+  if (differs(Array.from(toxicCBs).map(c => c.checked),  baselineScores.toxicVals  || [])) changed.push('toxic');
+  // People's Choice is a deliberate community award, not a correction of the
+  // AI — so awarding it always needs a reason, even though the AI never awards
+  // it and the "difference" would be trivially detected anyway.
+  if (!!document.getElementById('peoplesChoiceCB')?.checked !== !!baselineScores.peoplesChoice) changed.push('peoples');
+
+  return changed;
+}
+
+/**
+ * Adjusted sections whose justification is missing or too short.
+ * in:  none
+ * out: object[] — the failing entries from JUSTIFY_FIELDS
+ */
+function getMissingJustifications() {
+  const adjusted = new Set(getAdjustedSections());
+  return JUSTIFY_FIELDS.filter(f => {
+    if (!adjusted.has(f.key)) return false;
+    const el = document.getElementById(f.input);
+    return (el?.value || '').trim().length < MIN_JUSTIFICATION;
+  });
+}
+
+/**
+ * Gate an action that turns the audit into something others will see.
+ *
+ * Saving, sharing, and exporting are the moments a changed score stops being a
+ * private edit, so those are the three places the rule bites. Switching tabs is
+ * deliberately NOT gated — interrupting someone mid-thought teaches them to
+ * avoid the Community view rather than to explain themselves.
+ * in:  action (string) — verb for the toast, e.g. 'saving'
+ * out: boolean — true when the caller may proceed (side effects: view switch,
+ *      scroll, field highlighting, toast)
+ */
+function enforceJustifications(action) {
+  const missing = getMissingJustifications();
+  updateJustificationUI();
+  if (!missing.length) return true;
+
+  showView('community');
+  const first = document.getElementById(missing[0].input);
+  if (first) {
+    first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    first.focus({ preventScroll: true });
+  }
+  const names = missing.map(m => m.label).join(', ');
+  showToast(`Explain your ${names} change before ${action}`);
+  return false;
+}
+
+/**
+ * Mark every adjusted section's justification as required, and flag the ones
+ * still short. Runs on each score change and on each keystroke, so the demand
+ * appears the moment a score moves rather than as a wall at save time.
+ * in: none  out: void (DOM mutation)
+ */
+function updateJustificationUI() {
+  const adjusted = new Set(getAdjustedSections());
+  JUSTIFY_FIELDS.forEach(f => {
+    const input = document.getElementById(f.input);
+    if (!input) return;
+    const label = input.closest('.justification-wrap')?.querySelector('.justification-label');
+    const isRequired = adjusted.has(f.key);
+    const satisfied = (input.value || '').trim().length >= MIN_JUSTIFICATION;
+
+    if (label) {
+      label.textContent = isRequired
+        ? 'Community Justification (required — you changed this section)'
+        : 'Community Justification (optional)';
+      label.classList.toggle('required', isRequired);
+    }
+    // Only show the error state once it is required AND unsatisfied; a blank
+    // optional box is not an error.
+    input.classList.toggle('missing', isRequired && !satisfied);
+  });
+}
+
 function onJustificationChange() {
-  // Justifications don't change scores but we still want them captured on save.
-  // No-op for now beyond letting the textarea hold the value; saveAudit picks it up.
+  // Justifications don't change scores, but they do change whether the audit can
+  // be saved — so the required/missing state has to track typing, not just score
+  // edits. saveAudit still reads the values via getJustifications().
+  updateJustificationUI();
+}
+
+/**
+ * Clear all justification textareas.
+ *
+ * Called when a new analysis re-takes the baseline: the existing text was
+ * written to explain a difference from the PREVIOUS AI read, so against a fresh
+ * baseline it is justifying a comparison that no longer exists.
+ * in: none  out: void (DOM mutation)
+ */
+function clearJustifications() {
+  JUSTIFY_FIELDS.forEach(f => {
+    const el = document.getElementById(f.input);
+    if (el) { el.value = ''; el.classList.remove('missing'); }
+  });
+  updateJustificationUI();
 }
 
 function captureBaseline() {
@@ -2608,6 +2747,9 @@ async function autoAnalyze() {
   setLoading(true);
   resetChecks();
   baselineScores = null;  // cleared so the footer animates live; re-locked when analysis completes
+  // Any existing justification explains a difference from the PREVIOUS baseline,
+  // so it cannot survive a re-analysis without becoming misleading.
+  clearJustifications();
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('auditBox').style.display = 'none';
   document.getElementById('confidenceWrap').style.display = 'none';
@@ -3758,6 +3900,7 @@ function buildAuditObject() {
 }
 
 async function saveAudit() {
+  if (!enforceJustifications('saving')) return;
   const audit = buildAuditObject();
 
   // Cloud-first, localStorage fallback
@@ -3983,6 +4126,7 @@ function runComparison() {
 //  SHARE + PDF + COPY
 // ══════════════════════════════════════════════
 async function shareAudit() {
+  if (!enforceJustifications('sharing')) return;
   const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
 
   if (isCloudAvailable) {
@@ -4060,6 +4204,7 @@ function copyReport() {
 }
 
 function exportPDF() {
+  if (!enforceJustifications('exporting')) return;
   const { jsPDF } = window.jspdf;
   const name = document.getElementById('nameInput').value || 'Unknown';
   // Baseline = the AI's frozen read (canonical verdict); Adjusted = current live
