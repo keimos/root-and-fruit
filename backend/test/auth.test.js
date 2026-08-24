@@ -11,7 +11,7 @@
  *     handler (validation 400, not 401)
  */
 
-const { test, before, after, afterEach } = require('node:test');
+const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const authLib = require('../lib/auth');
