@@ -2737,7 +2737,7 @@ async function autoAnalyze() {
   if (!name) { showToast('Enter a name first'); return; }
   // AI audits are billed, so they require a signed-in account. Manual scoring,
   // saved audits, and sharing remain open to anonymous users.
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
 
   const jurisdiction = document.getElementById('jurisdictionInput').value.trim();
   const office = document.getElementById('officeInput').value.trim();
@@ -3102,6 +3102,20 @@ const AUTH_MIN_PASSWORD = 12;
 let firebaseAuth = null;          // firebase.auth() instance, or null when disabled
 let currentAuthUser = null;       // the signed-in firebase.User, or null
 
+// Settles once the auth state is actually KNOWN — the first onAuthStateChanged
+// callback, or immediately when auth is disabled. Firebase restores a persisted
+// session asynchronously, and initSplash() hides the splash the moment
+// sessionStorage says this browser already registered, so on a reload the app is
+// fully clickable for a few hundred ms while `currentAuthUser` is still null.
+// Gating a billed action on that raw value bounces a signed-in user to the
+// sign-in modal; awaiting this instead means the click just works.
+let resolveAuthReady;
+const authReady = new Promise((resolve) => { resolveAuthReady = resolve; });
+// Safety valve for the one case the explicit resolves below don't cover: the SDK
+// initializing but never invoking the listener. The app's primary button must not
+// hang on that — timing out falls through to the pre-existing "signed out" path.
+setTimeout(() => resolveAuthReady(), 3000);
+
 /**
  * Initialize Firebase Auth from injected runtime config, if present.
  * Wires an auth-state listener and reveals the header auth control.
@@ -3109,12 +3123,16 @@ let currentAuthUser = null;       // the signed-in firebase.User, or null
  */
 function initFirebaseAuth() {
   const cfg = window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase;
-  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') return; // auth disabled
+  // Auth disabled — there is no state to wait for, so let callers through now.
+  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') { resolveAuthReady(); return; }
   try {
     firebase.initializeApp(cfg);
     firebaseAuth = firebase.auth();
     firebaseAuth.onAuthStateChanged((user) => {
       currentAuthUser = user;
+      // The state is now known (signed in OR confirmed signed out) — release any
+      // billed action that clicked while the session was still being restored.
+      resolveAuthReady();
       updateAuthUI();
       // Loading the account also creates it on first sign-in, which is where the
       // one-time free credit grant is issued.
@@ -3132,6 +3150,8 @@ function initFirebaseAuth() {
     if (btn) btn.style.display = '';
   } catch (err) {
     console.error('Firebase auth init failed:', err);
+    // Init failed, so the listener will never fire — don't make callers wait it out.
+    resolveAuthReady();
   }
 }
 
@@ -3527,10 +3547,18 @@ function noteBalanceFromResponse(response) {
 
 /**
  * Gate a billed action on being signed in. Opens the auth modal when not.
+ *
+ * Waits for `authReady` first: a persisted session is restored asynchronously, so
+ * reading `currentAuthUser` the instant a click arrives can report "signed out"
+ * for a user who is signed in. Awaiting costs nothing once the state has settled
+ * (which it has, long before any realistic click) and is capped by authReady's
+ * own timeout, so this can never hang the button.
  * in:  none
- * out: boolean — true when the caller may proceed (side effect: may open modal)
+ * out: Promise<boolean> — true when the caller may proceed (side effect: may
+ *      open the auth modal)
  */
-function requireSignIn() {
+async function requireSignIn() {
+  await authReady;
   if (currentAuthUser) return true;
   // Auth disabled entirely (no Firebase config injected) — let the call through
   // and let the backend answer, so a misconfigured deploy fails loudly instead
@@ -3768,7 +3796,7 @@ function renderPlans() {
 async function startCheckout(priceId, btn) {
   const err = document.getElementById('billingError');
   if (err) err.classList.remove('show');
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
@@ -3799,7 +3827,7 @@ async function startCheckout(priceId, btn) {
 async function openBillingPortal() {
   const err = document.getElementById('billingError');
   if (err) err.classList.remove('show');
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
     const res = await fetch(backendUrl + '/api/billing/portal', {

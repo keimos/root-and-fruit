@@ -181,16 +181,57 @@ test('/api/analyze does not debit when the request fails validation', async () =
   assert.equal(fakeCredits.balance, 5);
 });
 
-test('/api/analyze refunds the credit when the Anthropic call fails', async () => {
+/** Make the Anthropic mock throw an error carrying `status`. in: status (number|undefined), msg (string)  out: void */
+function mockAnthropicFailing(status, msg = 'boom') {
   app.__setAnthropic({
-    messages: { stream: () => ({ finalMessage: async () => { const e = new Error('boom'); e.status = 400; throw e; } }) },
+    messages: {
+      stream: () => ({ finalMessage: async () => { const e = new Error(msg); if (status != null) e.status = status; throw e; } }),
+    },
   });
+}
+
+test('/api/analyze refunds the credit when the Anthropic call fails', async () => {
+  mockAnthropicFailing(400);
   try {
     const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 502);
     assert.equal(fakeCredits.balance, 5, 'credit returned — the audit never happened');
   } finally {
     mockAnthropicOk();
+  }
+});
+
+// ── upstream failures must never masquerade as client failures ──
+// An upstream 401 (our key rotated/revoked) reported as 401 made the frontend
+// show "Please sign in again" and open the sign-in modal — a dead API key looked
+// exactly like the audit button logging the user out. No upstream status may be
+// forwarded: the frontend routes on status, and 400/402/429 mislead just as badly.
+test('/api/analyze reports an upstream 401 as 502, never 401', async () => {
+  mockAnthropicFailing(401, 'invalid x-api-key');
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+    assert.equal(res.status, 502, 'an upstream auth failure must not read as the caller being signed out');
+    const body = await res.json();
+    assert.doesNotMatch(body.error, /x-api-key/i, 'the upstream message must not leak to the browser');
+    assert.equal(fakeCredits.balance, 5, 'credit returned');
+  } finally {
+    mockAnthropicOk();
+  }
+});
+
+test('/api/analyze collapses every upstream status to 502', async () => {
+  // 402 would trigger the credit wall and 403 collides with the email-verification
+  // wall. Only non-retryable statuses are exercised here: a retryable one (429,
+  // 5xx, network) would spend ~3.5s in withRetry's backoff before reaching the
+  // same handler, and retry behaviour itself is covered by retry.test.js.
+  for (const status of [400, 402, 403, 404]) {
+    mockAnthropicFailing(status);
+    try {
+      const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate' });
+      assert.equal(res.status, 502, `upstream ${status ?? 'network error'} should surface as 502`);
+    } finally {
+      mockAnthropicOk();
+    }
   }
 });
 
