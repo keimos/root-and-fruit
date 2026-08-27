@@ -1505,7 +1505,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justRoot" placeholder="Local knowledge, direct experience, or context not in the public record..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1546,7 +1546,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justBranch" placeholder="Local advocacy efforts or organizing history not captured in public records..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1608,7 +1608,7 @@
           </div>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justFruit" placeholder="Community-witnessed outcomes or local impact not in public records..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1632,7 +1632,7 @@
           <div class="slider-ticks"><span>Obscure (0)</span><span>Moderate (5)</span><span>Highly Visible (10)</span></div>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justVis" placeholder="Strong local presence not captured in mainstream coverage..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1682,7 +1682,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justToxic" placeholder="Documented evidence or community testimony supporting any Toxic Soil determination..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1700,7 +1700,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justPeoples" placeholder="Community relationship, trust, and direct engagement supporting this designation..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -2350,7 +2350,7 @@ function updateJustificationUI() {
     if (label) {
       label.textContent = isRequired
         ? 'Community Justification (required — you changed this section)'
-        : 'Community Justification (optional)';
+        : 'Community Justification';
       label.classList.toggle('required', isRequired);
     }
     // Only show the error state once it is required AND unsatisfied; a blank
@@ -2780,7 +2780,7 @@ async function autoAnalyze() {
     // A 401/402 is an account problem, not an audit failure — surface the sign-in
     // prompt or the credit wall instead of a red error box.
     if (!response.ok && await handleBilledRefusal(response)) return;  // finally { setLoading(false) } still runs
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     noteBalanceFromResponse(response);
     const data = await response.json();
     // Adaptive thinking + web_search can leave a prose preamble (e.g. "I have
@@ -2806,7 +2806,10 @@ async function autoAnalyze() {
 
   } catch(err) {
     console.error(err);
-    document.getElementById('errorBox').textContent = 'Audit failed: ' + err.message + '. Please try again.';
+    // The backend's own upstream message already ends in "Please try again." —
+    // only add our own retry nudge when the message doesn't carry one.
+    const msg = /try again/i.test(err.message) ? err.message : err.message.replace(/\.?$/, '.') + ' Please try again.';
+    document.getElementById('errorBox').textContent = 'Audit failed: ' + msg;
     document.getElementById('errorBox').style.display = 'block';
   } finally {
     setLoading(false);
@@ -3576,6 +3579,20 @@ async function requireSignIn() {
  *      surfaced to the user (caller should stop); false to fall through to the
  *      caller's normal error handling (side effects: modal / toast)
  */
+/**
+ * Turn a failed API response into a human-readable error message.
+ * The backend answers upstream (Anthropic) failures with a generic 502 +
+ * {error: "..."} body on purpose — a bare "API Error 502" tells the user
+ * nothing, so prefer the server's own sentence and fall back to the status.
+ * @param {Response} response  a fetch Response with response.ok === false
+ * @returns {Promise<string>}  message to show; never throws (side effect: reads the body)
+ */
+async function apiErrorMessage(response) {
+  const body = await response.json().catch(() => null);
+  if (body && typeof body.error === 'string' && body.error.trim()) return body.error;
+  return 'API Error ' + response.status;
+}
+
 async function handleBilledRefusal(response) {
   if (response.status === 401) {
     // Auth disabled (no Firebase config injected) but the backend requires it:
@@ -5185,7 +5202,7 @@ async function runLegislativeScrubber(target) {
     });
     // The Scrubber is billed (opt-in), so it can come back 401/402.
     if (!response.ok && await handleBilledRefusal(response)) return;
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     noteBalanceFromResponse(response);
     const data = await response.json();
     renderScrubberResults(extractJSON(messageText(data)));
@@ -5254,7 +5271,7 @@ async function runElectabilityScore() {
       card.style.display = 'none';
       return;
     }
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     const data = await response.json();
     renderElectabilityResult(extractJSON(messageText(data)));
   } catch(err) {
