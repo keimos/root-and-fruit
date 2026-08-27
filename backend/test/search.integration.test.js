@@ -198,8 +198,23 @@ test('/api/search refunds the credit when the Anthropic call fails', async () =>
   app.__setAnthropic({ messages: { create: () => { const e = new Error('boom'); e.status = 400; throw e; } } });
   try {
     const res = await post({ task: 'scrubber', name: 'Ada' });
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 502);
     assert.equal(fakeCredits.balance, 5, 'credit returned — the lookup never happened');
+  } finally {
+    app.__setAnthropic({ messages: { create: (args) => { captured = args; return FAKE_MESSAGE; } } });
+  }
+});
+
+// The Scrubber and Electability run through handleBilledRefusal on the frontend
+// exactly like the audit does, so an upstream 401 here would pop the sign-in
+// modal mid-audit. Same contract as /api/analyze: never forward the status.
+test('/api/search reports an upstream 401 as 502, never 401', async () => {
+  app.__setAnthropic({ messages: { create: () => { const e = new Error('invalid x-api-key'); e.status = 401; throw e; } } });
+  try {
+    const res = await post({ task: 'scrubber', name: 'Ada' });
+    assert.equal(res.status, 502, 'an upstream auth failure must not read as the caller being signed out');
+    assert.doesNotMatch((await res.json()).error, /x-api-key/i, 'the upstream message must not leak');
+    assert.equal(fakeCredits.balance, 5, 'credit returned');
   } finally {
     app.__setAnthropic({ messages: { create: (args) => { captured = args; return FAKE_MESSAGE; } } });
   }

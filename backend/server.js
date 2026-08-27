@@ -43,6 +43,32 @@ function isRetryable(err) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Report an upstream (Anthropic) failure to the client WITHOUT forwarding its
+ * status code or message.
+ *
+ * Forwarding either conflates a provider problem with a caller problem, and the
+ * frontend routes on status: an upstream 401 (our key rotated/revoked) became
+ * "Please sign in again" + the sign-in modal, so a dead API key looked exactly
+ * like the audit button logging the user out. The same trap sits behind other
+ * codes — Anthropic's 400 ("credit balance too low") reads as a malformed client
+ * request, and its 429 is indistinguishable from the `limiters.ai` 429 that
+ * really does mean "you clicked too fast".
+ *
+ * So every upstream failure becomes a 502 with a generic message; the real
+ * status and message are logged server-side. This matches what the billing
+ * routes already do with Stripe errors rather than inventing a second rule.
+ * @param {import('express').Response} res  response to write
+ * @param {*} err       the caught error (Anthropic SDK error, or a network error
+ *                      with no `.status`)
+ * @param {string} label  log label, e.g. 'analyze' / 'search'
+ * @returns {void}  none (side effects: console.error, response sent)
+ */
+function sendUpstreamFailure(res, err, label) {
+  console.error(`${label} upstream error:`, err?.status ?? 'network', err?.message);
+  res.status(502).json({ error: 'The AI service is unavailable right now. Please try again.' });
+}
+
 async function withRetry(fn, { retries = 3, baseDelay = 500, label = 'anthropic' } = {}) {
   let attempt = 0;
   for (;;) {
@@ -474,12 +500,10 @@ app.post('/api/analyze', limiters.ai, auth.requireAuth(), async (req, res) => {
     if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
     res.json(message);
   } catch (err) {
-    console.error('Analyze error:', err);
     // The audit never happened — give the credit back. A refund failure must not
     // mask the original error, so it is logged and swallowed.
     await credits.refund(req.user.uid, charge).catch((e) => console.error('Refund failed:', e));
-    const status = err?.status || 500;
-    res.status(status).json({ error: err.message || 'Analyze failed' });
+    sendUpstreamFailure(res, err, 'analyze');
   }
 });
 
@@ -543,10 +567,8 @@ app.post('/api/search', limiters.ai, auth.requireAuth(), async (req, res) => {
     if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
     res.json(message);
   } catch (err) {
-    console.error('Search error:', err);
     await credits.refund(req.user.uid, charge).catch((e) => console.error('Refund failed:', e));
-    const status = err?.status || 500;
-    res.status(status).json({ error: err.message || 'Search failed' });
+    sendUpstreamFailure(res, err, 'search');
   }
 });
 

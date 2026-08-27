@@ -210,7 +210,7 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Method | Path                              | Behavior                                                  |
 |--------|-----------------------------------|-----------------------------------------------------------|
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
-| POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit.** Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object, plus an `X-Credit-Balance` response header. 401 anonymous, 402 out of credits. |
+| POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit.** Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object, plus an `X-Credit-Balance` response header. 401 anonymous, 402 out of credits, **502 for any upstream (Anthropic) failure** — see [Upstream error contract](#upstream-error-contract). |
 | POST   | `/api/search`                     | **Signed-in only.** Lighter web-search proxy for the **Legislative Scrubber** (costs 1 credit) and **Electability Rating** (free). Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
 | GET    | `/api/account`                    | **Signed-in only.** Returns `{account}` (see `publicAccount`, which also reports `emailVerified`). Creates the account doc on first call, and issues the one-time free grant on the first call where the token says the address is verified. |
 | POST   | `/api/account`                    | **Signed-in only.** Merges profile fields (`firstName`, `lastName`, `org`, `role`, `acceptedTerms`). Balances, plan, and Stripe ids are server-owned and **cannot** be set by a caller. |
@@ -224,6 +224,22 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 ### CORS
 
 `cors({ origin: ALLOWED_ORIGIN || '*' })` — wide-open by default, intentionally. Tighten by setting `ALLOWED_ORIGIN` to the frontend's Cloud Run URL once the domain is final.
+
+### Upstream error contract
+
+`/api/analyze` and `/api/search` **never forward Anthropic's HTTP status or message** to the client. Every upstream failure becomes `502 {error: 'The AI service is unavailable right now. Please try again.'}` via `sendUpstreamFailure()`, with the real status/message logged server-side. The billing routes already do the same with Stripe errors.
+
+This is load-bearing, not cosmetic — **the frontend routes on status code**, so a forwarded upstream status impersonates a client-side condition:
+
+| Upstream status | What the frontend did with it |
+|---|---|
+| 401 (our key rotated/revoked) | `handleBilledRefusal` → "Please sign in again" + sign-in modal. **A dead API key looked exactly like the audit button logging the user out.** |
+| 400 ("credit balance too low" on our org) | "API Error 400" — reads as the *user's* request being malformed |
+| 402 | credit wall, for a balance the user hasn't actually spent |
+| 403 | collides with the `email_unverified` verification wall |
+| 429 | indistinguishable from `limiters.ai`'s own 429, which really does mean "you clicked too fast" |
+
+Don't "improve" this by forwarding a status allowlist — the failure mode is one unanticipated code away each time. Regression tests: `analyze.integration.test.js` / `search.integration.test.js` ("reports an upstream 401 as 502").
 
 ### Rate limiting
 

@@ -689,6 +689,11 @@
     transition: border-color 0.2s;
   }
   .justification-input:focus { outline: none; border-color: var(--gold); }
+  /* Required-but-unwritten. Deliberately a border + tint rather than a shout:
+     the point is to be noticed while editing, not to scold. */
+  .justification-input.missing { border-color: var(--red); background: rgba(192,57,43,0.05); }
+  .justification-input.missing:focus { border-color: var(--red); }
+  .justification-label.required { color: var(--red); }
   .justification-input::placeholder { color: var(--text-dimmer); font-style: italic; }
 
   .community-score-indicator {
@@ -1500,7 +1505,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justRoot" placeholder="Local knowledge, direct experience, or context not in the public record..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1541,7 +1546,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justBranch" placeholder="Local advocacy efforts or organizing history not captured in public records..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1603,7 +1608,7 @@
           </div>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justFruit" placeholder="Community-witnessed outcomes or local impact not in public records..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1627,7 +1632,7 @@
           <div class="slider-ticks"><span>Obscure (0)</span><span>Moderate (5)</span><span>Highly Visible (10)</span></div>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justVis" placeholder="Strong local presence not captured in mainstream coverage..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1677,7 +1682,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justToxic" placeholder="Documented evidence or community testimony supporting any Toxic Soil determination..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -1695,7 +1700,7 @@
           </label>
         </div>
         <div class="justification-wrap">
-          <div class="justification-label">Community Justification (optional)</div>
+          <div class="justification-label">Community Justification</div>
           <textarea class="justification-input" id="justPeoples" placeholder="Community relationship, trust, and direct engagement supporting this designation..." oninput="onJustificationChange()"></textarea>
         </div>
       </div>
@@ -2194,6 +2199,8 @@ function getCommunityDelta() {
 }
 
 function updateCommunityScoreIndicator() {
+  // Keeps the required/missing marks in step with the scores that drive them.
+  updateJustificationUI();
   const aiEl  = document.getElementById('csiAiScore');
   const comEl = document.getElementById('csiCommunityScore');
   const barAi = document.getElementById('csiBarAi');
@@ -2238,9 +2245,141 @@ function updateCommunityScoreIndicator() {
   }
 }
 
+// ── Community justifications: required when you change the AI's read ──
+// The rule: if you move a score away from the AI baseline, you say why. It only
+// applies once a baseline EXISTS — with no analysis run there is nothing to
+// deviate from, and every score is original work rather than a revision.
+const MIN_JUSTIFICATION = 20;
+
+// Section key → the textarea holding its justification, and the label shown in
+// error copy. Order matches the cards down the Community Assessment page, so
+// "first offender" scrolling lands on the topmost one.
+const JUSTIFY_FIELDS = [
+  { key: 'root',    input: 'justRoot',    label: 'Root' },
+  { key: 'branch',  input: 'justBranch',  label: 'Branches' },
+  { key: 'fruit',   input: 'justFruit',   label: 'Fruit' },
+  { key: 'vis',     input: 'justVis',     label: 'Light' },
+  { key: 'toxic',   input: 'justToxic',   label: 'Toxic Soil' },
+  { key: 'peoples', input: 'justPeoples', label: "People's Choice" }
+];
+
+/**
+ * Which sections has the user moved away from the AI baseline?
+ *
+ * A pure comparison against the snapshot captureBaseline() already stores, so
+ * round-trips resolve correctly for free: check a box and uncheck it and the
+ * section is no longer "adjusted".
+ * in:  none
+ * out: string[] — section keys (see JUSTIFY_FIELDS); empty when no baseline
+ *      exists, because then nothing counts as an adjustment
+ */
+function getAdjustedSections() {
+  if (!baselineScores) return [];
+  const changed = [];
+  const differs = (live, base) => live.some((v, i) => v !== base[i]);
+
+  if (differs(Array.from(rootCBs).map(c => c.checked),   baselineScores.rootVals   || [])) changed.push('root');
+  if (differs(Array.from(branchCBs).map(c => c.checked), baselineScores.branchVals || [])) changed.push('branch');
+  if (differs(Array.from(fruitSls).map(s => +s.value),   baselineScores.fruitVals  || [])) changed.push('fruit');
+  if (+visSlider.value !== baselineScores.vis) changed.push('vis');
+  if (differs(Array.from(toxicCBs).map(c => c.checked),  baselineScores.toxicVals  || [])) changed.push('toxic');
+  // People's Choice is a deliberate community award, not a correction of the
+  // AI — so awarding it always needs a reason, even though the AI never awards
+  // it and the "difference" would be trivially detected anyway.
+  if (!!document.getElementById('peoplesChoiceCB')?.checked !== !!baselineScores.peoplesChoice) changed.push('peoples');
+
+  return changed;
+}
+
+/**
+ * Adjusted sections whose justification is missing or too short.
+ * in:  none
+ * out: object[] — the failing entries from JUSTIFY_FIELDS
+ */
+function getMissingJustifications() {
+  const adjusted = new Set(getAdjustedSections());
+  return JUSTIFY_FIELDS.filter(f => {
+    if (!adjusted.has(f.key)) return false;
+    const el = document.getElementById(f.input);
+    return (el?.value || '').trim().length < MIN_JUSTIFICATION;
+  });
+}
+
+/**
+ * Gate an action that turns the audit into something others will see.
+ *
+ * Saving, sharing, and exporting are the moments a changed score stops being a
+ * private edit, so those are the three places the rule bites. Switching tabs is
+ * deliberately NOT gated — interrupting someone mid-thought teaches them to
+ * avoid the Community view rather than to explain themselves.
+ * in:  action (string) — verb for the toast, e.g. 'saving'
+ * out: boolean — true when the caller may proceed (side effects: view switch,
+ *      scroll, field highlighting, toast)
+ */
+function enforceJustifications(action) {
+  const missing = getMissingJustifications();
+  updateJustificationUI();
+  if (!missing.length) return true;
+
+  showView('community');
+  const first = document.getElementById(missing[0].input);
+  if (first) {
+    first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    first.focus({ preventScroll: true });
+  }
+  const names = missing.map(m => m.label).join(', ');
+  showToast(`Explain your ${names} change before ${action}`);
+  return false;
+}
+
+/**
+ * Mark every adjusted section's justification as required, and flag the ones
+ * still short. Runs on each score change and on each keystroke, so the demand
+ * appears the moment a score moves rather than as a wall at save time.
+ * in: none  out: void (DOM mutation)
+ */
+function updateJustificationUI() {
+  const adjusted = new Set(getAdjustedSections());
+  JUSTIFY_FIELDS.forEach(f => {
+    const input = document.getElementById(f.input);
+    if (!input) return;
+    const label = input.closest('.justification-wrap')?.querySelector('.justification-label');
+    const isRequired = adjusted.has(f.key);
+    const satisfied = (input.value || '').trim().length >= MIN_JUSTIFICATION;
+
+    if (label) {
+      label.textContent = isRequired
+        ? 'Community Justification (required — you changed this section)'
+        : 'Community Justification';
+      label.classList.toggle('required', isRequired);
+    }
+    // Only show the error state once it is required AND unsatisfied; a blank
+    // optional box is not an error.
+    input.classList.toggle('missing', isRequired && !satisfied);
+  });
+}
+
 function onJustificationChange() {
-  // Justifications don't change scores but we still want them captured on save.
-  // No-op for now beyond letting the textarea hold the value; saveAudit picks it up.
+  // Justifications don't change scores, but they do change whether the audit can
+  // be saved — so the required/missing state has to track typing, not just score
+  // edits. saveAudit still reads the values via getJustifications().
+  updateJustificationUI();
+}
+
+/**
+ * Clear all justification textareas.
+ *
+ * Called when a new analysis re-takes the baseline: the existing text was
+ * written to explain a difference from the PREVIOUS AI read, so against a fresh
+ * baseline it is justifying a comparison that no longer exists.
+ * in: none  out: void (DOM mutation)
+ */
+function clearJustifications() {
+  JUSTIFY_FIELDS.forEach(f => {
+    const el = document.getElementById(f.input);
+    if (el) { el.value = ''; el.classList.remove('missing'); }
+  });
+  updateJustificationUI();
 }
 
 function captureBaseline() {
@@ -2598,7 +2737,7 @@ async function autoAnalyze() {
   if (!name) { showToast('Enter a name first'); return; }
   // AI audits are billed, so they require a signed-in account. Manual scoring,
   // saved audits, and sharing remain open to anonymous users.
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
 
   const jurisdiction = document.getElementById('jurisdictionInput').value.trim();
   const office = document.getElementById('officeInput').value.trim();
@@ -2608,6 +2747,9 @@ async function autoAnalyze() {
   setLoading(true);
   resetChecks();
   baselineScores = null;  // cleared so the footer animates live; re-locked when analysis completes
+  // Any existing justification explains a difference from the PREVIOUS baseline,
+  // so it cannot survive a re-analysis without becoming misleading.
+  clearJustifications();
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('auditBox').style.display = 'none';
   document.getElementById('confidenceWrap').style.display = 'none';
@@ -2638,7 +2780,7 @@ async function autoAnalyze() {
     // A 401/402 is an account problem, not an audit failure — surface the sign-in
     // prompt or the credit wall instead of a red error box.
     if (!response.ok && await handleBilledRefusal(response)) return;  // finally { setLoading(false) } still runs
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     noteBalanceFromResponse(response);
     const data = await response.json();
     // Adaptive thinking + web_search can leave a prose preamble (e.g. "I have
@@ -2664,7 +2806,10 @@ async function autoAnalyze() {
 
   } catch(err) {
     console.error(err);
-    document.getElementById('errorBox').textContent = 'Audit failed: ' + err.message + '. Please try again.';
+    // The backend's own upstream message already ends in "Please try again." —
+    // only add our own retry nudge when the message doesn't carry one.
+    const msg = /try again/i.test(err.message) ? err.message : err.message.replace(/\.?$/, '.') + ' Please try again.';
+    document.getElementById('errorBox').textContent = 'Audit failed: ' + msg;
     document.getElementById('errorBox').style.display = 'block';
   } finally {
     setLoading(false);
@@ -2960,6 +3105,20 @@ const AUTH_MIN_PASSWORD = 12;
 let firebaseAuth = null;          // firebase.auth() instance, or null when disabled
 let currentAuthUser = null;       // the signed-in firebase.User, or null
 
+// Settles once the auth state is actually KNOWN — the first onAuthStateChanged
+// callback, or immediately when auth is disabled. Firebase restores a persisted
+// session asynchronously, and initSplash() hides the splash the moment
+// sessionStorage says this browser already registered, so on a reload the app is
+// fully clickable for a few hundred ms while `currentAuthUser` is still null.
+// Gating a billed action on that raw value bounces a signed-in user to the
+// sign-in modal; awaiting this instead means the click just works.
+let resolveAuthReady;
+const authReady = new Promise((resolve) => { resolveAuthReady = resolve; });
+// Safety valve for the one case the explicit resolves below don't cover: the SDK
+// initializing but never invoking the listener. The app's primary button must not
+// hang on that — timing out falls through to the pre-existing "signed out" path.
+setTimeout(() => resolveAuthReady(), 3000);
+
 /**
  * Initialize Firebase Auth from injected runtime config, if present.
  * Wires an auth-state listener and reveals the header auth control.
@@ -2967,12 +3126,16 @@ let currentAuthUser = null;       // the signed-in firebase.User, or null
  */
 function initFirebaseAuth() {
   const cfg = window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase;
-  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') return; // auth disabled
+  // Auth disabled — there is no state to wait for, so let callers through now.
+  if (!cfg || !cfg.apiKey || typeof firebase === 'undefined') { resolveAuthReady(); return; }
   try {
     firebase.initializeApp(cfg);
     firebaseAuth = firebase.auth();
     firebaseAuth.onAuthStateChanged((user) => {
       currentAuthUser = user;
+      // The state is now known (signed in OR confirmed signed out) — release any
+      // billed action that clicked while the session was still being restored.
+      resolveAuthReady();
       updateAuthUI();
       // Loading the account also creates it on first sign-in, which is where the
       // one-time free credit grant is issued.
@@ -2990,6 +3153,8 @@ function initFirebaseAuth() {
     if (btn) btn.style.display = '';
   } catch (err) {
     console.error('Firebase auth init failed:', err);
+    // Init failed, so the listener will never fire — don't make callers wait it out.
+    resolveAuthReady();
   }
 }
 
@@ -3385,10 +3550,18 @@ function noteBalanceFromResponse(response) {
 
 /**
  * Gate a billed action on being signed in. Opens the auth modal when not.
+ *
+ * Waits for `authReady` first: a persisted session is restored asynchronously, so
+ * reading `currentAuthUser` the instant a click arrives can report "signed out"
+ * for a user who is signed in. Awaiting costs nothing once the state has settled
+ * (which it has, long before any realistic click) and is capped by authReady's
+ * own timeout, so this can never hang the button.
  * in:  none
- * out: boolean — true when the caller may proceed (side effect: may open modal)
+ * out: Promise<boolean> — true when the caller may proceed (side effect: may
+ *      open the auth modal)
  */
-function requireSignIn() {
+async function requireSignIn() {
+  await authReady;
   if (currentAuthUser) return true;
   // Auth disabled entirely (no Firebase config injected) — let the call through
   // and let the backend answer, so a misconfigured deploy fails loudly instead
@@ -3406,6 +3579,20 @@ function requireSignIn() {
  *      surfaced to the user (caller should stop); false to fall through to the
  *      caller's normal error handling (side effects: modal / toast)
  */
+/**
+ * Turn a failed API response into a human-readable error message.
+ * The backend answers upstream (Anthropic) failures with a generic 502 +
+ * {error: "..."} body on purpose — a bare "API Error 502" tells the user
+ * nothing, so prefer the server's own sentence and fall back to the status.
+ * @param {Response} response  a fetch Response with response.ok === false
+ * @returns {Promise<string>}  message to show; never throws (side effect: reads the body)
+ */
+async function apiErrorMessage(response) {
+  const body = await response.json().catch(() => null);
+  if (body && typeof body.error === 'string' && body.error.trim()) return body.error;
+  return 'API Error ' + response.status;
+}
+
 async function handleBilledRefusal(response) {
   if (response.status === 401) {
     // Auth disabled (no Firebase config injected) but the backend requires it:
@@ -3626,7 +3813,7 @@ function renderPlans() {
 async function startCheckout(priceId, btn) {
   const err = document.getElementById('billingError');
   if (err) err.classList.remove('show');
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
@@ -3657,7 +3844,7 @@ async function startCheckout(priceId, btn) {
 async function openBillingPortal() {
   const err = document.getElementById('billingError');
   if (err) err.classList.remove('show');
-  if (!requireSignIn()) return;
+  if (!(await requireSignIn())) return;
   try {
     const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
     const res = await fetch(backendUrl + '/api/billing/portal', {
@@ -3758,6 +3945,7 @@ function buildAuditObject() {
 }
 
 async function saveAudit() {
+  if (!enforceJustifications('saving')) return;
   const audit = buildAuditObject();
 
   // Cloud-first, localStorage fallback
@@ -3983,6 +4171,7 @@ function runComparison() {
 //  SHARE + PDF + COPY
 // ══════════════════════════════════════════════
 async function shareAudit() {
+  if (!enforceJustifications('sharing')) return;
   const isCloudAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl);
 
   if (isCloudAvailable) {
@@ -4060,6 +4249,7 @@ function copyReport() {
 }
 
 function exportPDF() {
+  if (!enforceJustifications('exporting')) return;
   const { jsPDF } = window.jspdf;
   const name = document.getElementById('nameInput').value || 'Unknown';
   // Baseline = the AI's frozen read (canonical verdict); Adjusted = current live
@@ -5012,7 +5202,7 @@ async function runLegislativeScrubber(target) {
     });
     // The Scrubber is billed (opt-in), so it can come back 401/402.
     if (!response.ok && await handleBilledRefusal(response)) return;
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     noteBalanceFromResponse(response);
     const data = await response.json();
     renderScrubberResults(extractJSON(messageText(data)));
@@ -5081,7 +5271,7 @@ async function runElectabilityScore() {
       card.style.display = 'none';
       return;
     }
-    if (!response.ok) throw new Error('API Error ' + response.status);
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     const data = await response.json();
     renderElectabilityResult(extractJSON(messageText(data)));
   } catch(err) {
