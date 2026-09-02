@@ -223,7 +223,11 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 ### CORS
 
-`cors({ origin: ALLOWED_ORIGIN || '*' })` — wide-open by default, intentionally. Tighten by setting `ALLOWED_ORIGIN` to the frontend's Cloud Run URL once the domain is final.
+`cors({ origin: parseAllowedOrigins(ALLOWED_ORIGIN) })` — always a **concrete origin list**, never a wildcard. Unset falls back to the local-dev origins (`http://localhost:8080`, `http://127.0.0.1:8080`); set `ALLOWED_ORIGIN` to the frontend's public URLs in every deployed environment.
+
+**`*` is not supported — not as a default, not as an explicit value.** An explicit `*` entry is dropped rather than honoured, so no env var can reopen it. The wildcard was only ever harmless by accident: auth is a Bearer ID token and `credentials` is deliberately never enabled, so `*` exposed nothing `curl` could not already reach. That safety is incidental, not structural — the first cookie or `credentials: true` added anywhere would silently turn it into an account-takeover path, with nothing in that diff pointing back at this line. Closed CodeQL `js/cors-permissive-configuration`.
+
+`ALLOWED_ORIGIN` is optional, so a deploy that drops it narrows CORS to localhost and every real browser request dies at its preflight — an `OPTIONS 204` and nothing in the logs. The boot-time `CONFIG ERROR` guard (mirroring the `APP_URL` one) is what makes that loud.
 
 ### Upstream error contract
 
@@ -318,7 +322,7 @@ anthropic.messages.stream({
 | `REGISTRATION_FROM`     | no      | Resend `from` sender. Defaults to the `onboarding@resend.dev` sandbox (delivers only to the Resend account owner) — **set this to a verified domain sender (e.g. `Root & Fruit <noreply@rootandfruit.app>`) in production.** |
 | `DONATION_URL`          | no      | Donation CTA link in the registrant auto-reply email. If unset, the auto-reply omits the donation line entirely (rather than shipping a placeholder). Set to the live donation URL (e.g. `https://anvilinstitute.org/give`) in production. |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
-| `ALLOWED_ORIGIN`        | no      | CORS origin allowlist — a **comma-separated list**. Defaults to `*`. Cloud Run serves each service on two URL formats (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`); listing only one means a browser on the other has its preflight rejected and its real request silently dropped. |
+| `ALLOWED_ORIGIN`        | no      | CORS origin allowlist — a **comma-separated list**. Unset falls back to the local-dev origins (`http://localhost:8080`, `http://127.0.0.1:8080`) and logs a `CONFIG ERROR` when `NODE_ENV=production`; `*` is **not** accepted and is stripped if supplied. Cloud Run serves each service on two URL formats (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`); listing only one means a browser on the other has its preflight rejected and its real request silently dropped. |
 | `RATE_LIMIT_AI`         | no      | Max `/api/analyze` + `/api/search` requests per window per client IP. Defaults to `15`.       |
 | `RATE_LIMIT_REGISTER`   | no      | Max `/api/register` requests per window per client IP. Defaults to `5`.                       |
 | `RATE_LIMIT_API`        | no      | Blanket cap over the rest of `/api/*` per window per client IP. Defaults to `100`.           |
@@ -384,7 +388,7 @@ The non-negotiable wiring:
 - Every Stripe **product** needs `metadata.credits` (or no credits are granted after a successful charge) and, when Managed Payments is enabled, a `tax_code` (or checkout 400s outright).
 2. Deploy the **backend** first. It needs `ANTHROPIC_API_KEY` (from a secret store, never a plaintext env), service-account credentials with Firestore read/write, and `GOOGLE_CLOUD_PROJECT` (or equivalent) for the Firestore client. Long-running AI requests can take tens of seconds — set the platform's request timeout to ≥ 300s.
 3. Deploy the **frontend** with `BACKEND_URL` pointing at the backend's public URL. The frontend image carries no build-time config — `BACKEND_URL` is read at request time and injected into HTML via `frontend/server.js`.
-4. (Optional) Tighten CORS by setting `ALLOWED_ORIGIN` on the backend to the frontend's public URL.
+4. Set `ALLOWED_ORIGIN` on the backend to the frontend's public URL(s), comma-separated. **Not optional for a browser-facing deploy** — unset means CORS admits only localhost and every real request fails its preflight.
 
 **Build order is a hard constraint** regardless of how you deploy: the frontend deploy depends on the backend's URL, so the two cannot be parallelized. The backend must be deployed (and its URL captured) before the frontend.
 
@@ -421,7 +425,7 @@ Configuration lives in **GitHub repo variables** (Settings → Secrets and varia
 
 One-time GCP setup (not automated — run once by an operator): enable the `run`, `cloudbuild`, `artifactregistry`, `iamcredentials`, and `secretmanager` APIs; create the two Secret Manager secrets; create the deploy SA with `run.admin` + `cloudbuild.builds.editor` + `artifactregistry.admin` + `storage.admin` + `iam.serviceAccountUser`; grant the **runtime** SA `datastore.user` + `secretmanager.secretAccessor`; and create the WIF pool/provider bound to this repo. The `audits` composite index still must be created manually — the workflow does not manage Firestore indexes.
 
-**Gotchas:** both Secret Manager secrets must exist before the first deploy or the backend step fails (create `resend-api-key` with a placeholder if Resend isn't in use yet, or drop its token from `--set-secrets`). CORS stays `*` until `ALLOWED_ORIGIN` is set as a repo variable.
+**Gotchas:** both Secret Manager secrets must exist before the first deploy or the backend step fails (create `resend-api-key` with a placeholder if Resend isn't in use yet, or drop its token from `--set-secrets`). `ALLOWED_ORIGIN` must be set as a repo/Environment variable listing the frontend origins — without it CORS admits only localhost and the deployed frontend cannot reach the backend from a browser.
 
 ### Local dev
 
@@ -579,6 +583,7 @@ Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stre
 - **Do not** grant credits from anywhere except `ensureAccount()`'s one-time grant (and, later, the signature-verified Stripe webhook). A URL parameter, a redirect, or a client call must never increase a balance.
 - **Do not** issue the free grant to an unverified address, and do not drop the `billableAllowed()` check on the billed routes. Without the verification gate the credit quota is decorative — a throwaway `+alias` mints another 5 Opus calls, and the Anthropic bill is unbounded.
 - **Do not** remove the `requireAuth()` gate or the debit on `/api/analyze` / `/api/search` — without them the Anthropic key is an open, unmetered bill.
+- **Do not** reintroduce a `*` CORS origin — not as a default, not as an accepted `ALLOWED_ORIGIN` value. It is safe today only because no route uses ambient browser credentials; that stops being true the moment anyone adds a cookie or `credentials: true`, and the wildcard would not be in that diff.
 - **Do not** treat `/api/share/:token` tokens as a security boundary — they are casual share URLs only. If something stronger is needed, switch to `crypto.randomBytes`.
 - **Do not** alter the verdict thresholds, section maxima, or 57-point total without updating the verdict labels, share-card layout, and methodology copy together.
 - **Do not** introduce session affinity, in-memory caching, or sticky sessions on Cloud Run — both services are stateless.
