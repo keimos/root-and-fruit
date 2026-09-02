@@ -414,7 +414,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', ts: Date.now() }));
 // Uses adaptive thinking + server-side web_search so the model
 // can verify claims against current sources instead of relying
 // solely on its training cutoff.
-app.post('/api/analyze', limiters.ai, auth.requireAuth(), async (req, res) => {
+app.post('/api/analyze', limiters.ai, auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   // Injection fix #1: the client sends only structured subject fields — the
@@ -517,7 +517,7 @@ app.post('/api/analyze', limiters.ai, auth.requireAuth(), async (req, res) => {
 // directly can NO LONGER supply or override the system prompt — so it can't be
 // used as an open Anthropic proxy on our key. Any client `system`/`messages`
 // in the body are ignored.
-app.post('/api/search', limiters.ai, auth.requireAuth(), async (req, res) => {
+app.post('/api/search', limiters.ai, auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
 
   const { task, name } = req.body || {};
@@ -636,7 +636,7 @@ app.post('/api/register', limiters.register, async (req, res) => {
 // Signed-in only. The account doc is created on first read, which is also where
 // the one-time free grant is issued — inside the same transaction that creates
 // the doc, so it can never be issued twice for the same uid.
-app.get('/api/account', auth.requireAuth(), async (req, res) => {
+app.get('/api/account', auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
   try {
     const account = await credits.ensureAccount(req.user);
     res.json({ account: creditsLib.publicAccount(account, req.user) });
@@ -648,7 +648,7 @@ app.get('/api/account', auth.requireAuth(), async (req, res) => {
 
 // Profile update. Only the fields in profilePatch() are writable — balances,
 // plan, and Stripe ids are server-owned and cannot be set by a caller.
-app.post('/api/account', auth.requireAuth(), async (req, res) => {
+app.post('/api/account', auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
   try {
     const account = await credits.ensureAccount(req.user, req.body || {});
     res.json({ account: creditsLib.publicAccount(account, req.user) });

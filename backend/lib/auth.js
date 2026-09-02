@@ -21,6 +21,7 @@ const admin = require('firebase-admin');
 // avoid a live Firebase project). `let` so __setVerifier can swap it in.
 let adminApp = null;
 let injectedVerifier = null;
+let injectedUserLookup = null;
 
 /**
  * Lazily initialize (once) and return the Firebase Admin SDK, or null when no
@@ -45,6 +46,31 @@ function getAdmin() {
  * @returns {void}
  */
 function __setVerifier(fn) { injectedVerifier = fn; }
+
+/**
+ * Test seam: inject a fake user-record lookup so the live verification refresh
+ * can be exercised without a Firebase project. Pass null to restore the real
+ * Admin SDK lookup.
+ * @param {((uid: string) => Promise<object>)|null} fn  lookup returning a record
+ * @returns {void}
+ */
+function __setUserLookup(fn) { injectedUserLookup = fn; }
+
+/**
+ * Read the LIVE Firebase user record for a uid, via the Admin SDK.
+ *
+ * Distinct from verifyIdToken on purpose: that returns claims frozen when the
+ * token was minted, this returns Firebase's current record.
+ * @param {string} uid  the Firebase uid
+ * @returns {Promise<object>}  the user record (emailVerified, email, …)
+ * @throws  if Firebase Auth is unconfigured or the uid is unknown
+ */
+async function lookupUser(uid) {
+  if (injectedUserLookup) return injectedUserLookup(uid);
+  const a = getAdmin();
+  if (!a) throw new Error('Firebase Auth is not configured');
+  return a.auth().getUser(uid);
+}
 
 /**
  * Verify a Firebase ID token and return its decoded claims.
@@ -134,7 +160,42 @@ function requireAuth() {
   };
 }
 
+/**
+ * Middleware: upgrade a stale `email_verified: false` claim from the live
+ * Firebase record. Mount AFTER requireAuth/optionalAuth.
+ *
+ * `email_verified` is baked into an ID token when it is minted, so a user who
+ * clicks the verification link on another device — or in another tab — keeps
+ * sending a token claiming `false` until that token expires (up to an hour).
+ * That claim gates the one-time free grant and every billed route, so trusting
+ * it strands a verified user at a zero balance with nothing in the UI to explain
+ * why. Firebase holds the authoritative answer; ask it rather than waiting for
+ * the token to catch up.
+ *
+ * Runs ONLY when the claim is already false. A true claim cannot be stale in the
+ * direction that matters (Firebase does not un-verify an address), so the common
+ * path costs no extra call. A lookup failure is swallowed and the request
+ * proceeds on the token's claim exactly as it did before this middleware
+ * existed — an Admin SDK outage degrades to the old behaviour, never to a 500.
+ * @returns {import('express').RequestHandler}  the middleware
+ */
+function liveEmailVerification() {
+  return async (req, _res, next) => {
+    if (req.user && !req.user.emailVerified) {
+      try {
+        const record = await lookupUser(req.user.uid);
+        if (record && record.emailVerified) req.user.emailVerified = true;
+      } catch (err) {
+        // Deliberately non-fatal — see the note above.
+        console.error('Live email-verification lookup failed:', err.message);
+      }
+    }
+    next();
+  };
+}
+
 module.exports = {
-  optionalAuth, requireAuth, resolveUser, extractBearer, verifyIdToken, __setVerifier,
+  optionalAuth, requireAuth, liveEmailVerification, resolveUser, extractBearer,
+  verifyIdToken, lookupUser, __setVerifier, __setUserLookup,
   MAX_AUTH_HEADER
 };

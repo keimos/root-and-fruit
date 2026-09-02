@@ -3284,7 +3284,9 @@ function setAuthBusy(id, busy) {
 
 /**
  * Register a new account (email/password), set the display name, and send a
- * verification email. Validates all fields client-side first.
+ * verification email. Validates all fields client-side first. A verification
+ * email that fails to send is REPORTED, not swallowed — that click is what
+ * releases the free credit grant.
  * in: none (reads form)  out: Promise<void> (Firebase calls, DOM)
  */
 async function authRegister() {
@@ -3304,14 +3306,30 @@ async function authRegister() {
   try {
     const cred = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     await cred.user.updateProfile({ displayName: `${first} ${last}`.trim() });
-    try { await cred.user.sendEmailVerification(); } catch { /* non-fatal */ }
+    // Not fatal to an account that already exists, but it must not be silent:
+    // clicking the link in this email is what releases the free credits, so a
+    // user who never received it would sit at a zero balance with no idea why.
+    let verificationSent = true;
+    try {
+      await cred.user.sendEmailVerification();
+    } catch (err) {
+      verificationSent = false;
+      console.error('Verification email failed to send:', err);
+    }
     // Account creation IS the registration: this is what fires the Firestore
     // lead capture and the Resend welcome email, so signed-up users are never
     // asked to fill the separate splash lead form. Best-effort — a delivery or
     // network failure must not undo an account that already exists.
     try { await submitAccountRegistration(first, last, email); } catch (err) { console.error('Lead capture failed:', err); }
-    showAuthAlert('ok', 'Account created! Check your email to verify your address.');
-    setTimeout(closeAuthModal, 1800);
+    if (verificationSent) {
+      showAuthAlert('ok', 'Account created! Check your email to verify your address.');
+      setTimeout(closeAuthModal, 1800);
+    } else {
+      // Left open on purpose: this needs an action, not a 1.8-second glance.
+      showAuthAlert('err', 'Account created, but the verification email could not be sent. '
+        + 'Your free credits unlock once your address is verified — request a new link '
+        + 'from the verification prompt, or try again shortly.');
+    }
   } catch (err) {
     showAuthAlert('err', authErrorMessage(err));
   } finally {
@@ -3486,6 +3504,42 @@ async function recheckVerification() {
   await refreshAccount();
   return accountVerified;
 }
+
+// Verifying on a phone leaves this tab holding a token that still claims the
+// address is unverified, and nothing in the app would otherwise look again — the
+// only other caller of recheckVerification() is a button on a wall the user has
+// to trip first. Coming back to the tab is the natural moment to re-ask.
+const VERIFY_RECHECK_MIN_MS = 10000;
+let lastVerifyRecheck = 0;
+
+/**
+ * Re-check verification when the tab regains focus, for a signed-in account the
+ * server still considers unverified. Silent when there is nothing to do: it
+ * no-ops while signed out, once verified, and inside a 10s cooldown, so an
+ * alt-tabbing user cannot turn it into a request loop.
+ * in: none
+ * out: Promise<void> (network via recheckVerification; toasts + closes the
+ *      verify wall when the address turns out to be verified)
+ */
+async function recheckVerificationOnFocus() {
+  if (!currentAuthUser || accountVerified) return;
+  if (document.visibilityState !== 'visible') return;
+  const now = Date.now();
+  if (now - lastVerifyRecheck < VERIFY_RECHECK_MIN_MS) return;
+  lastVerifyRecheck = now;
+  const before = creditBalance;
+  await recheckVerification();
+  if (!accountVerified) return;
+  closeVerifyWall();
+  // Only announce credits that actually landed — a user who verified long ago
+  // and simply switched tabs should not be told they were just granted.
+  if (creditBalance && creditBalance !== before) {
+    showToast(`Email verified — ${creditBalance} credits added`);
+  }
+}
+
+document.addEventListener('visibilitychange', recheckVerificationOnFocus);
+window.addEventListener('focus', recheckVerificationOnFocus);
 
 /**
  * Redraw the header credit pill from `creditBalance`.
