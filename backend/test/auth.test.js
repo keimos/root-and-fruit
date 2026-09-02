@@ -15,7 +15,8 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const authLib = require('../lib/auth');
-const { extractBearer, optionalAuth, requireAuth, __setVerifier, MAX_AUTH_HEADER } = authLib;
+const { extractBearer, optionalAuth, requireAuth, liveEmailVerification,
+  __setVerifier, __setUserLookup, MAX_AUTH_HEADER } = authLib;
 const app = require('../server');
 
 /** Build a minimal Express-ish response spy. @returns {object} res with status/json capture */
@@ -44,7 +45,7 @@ function runMw(mw, req) {
   });
 }
 
-afterEach(() => __setVerifier(null)); // restore real verification between tests
+afterEach(() => { __setVerifier(null); __setUserLookup(null); }); // restore real verification between tests
 
 // ── extractBearer ──────────────────────────────────────
 test('extractBearer: pulls the token from a Bearer header', () => {
@@ -151,4 +152,57 @@ test('extractBearer: still tolerates the whitespace real clients send', () => {
   assert.equal(extractBearer({ headers: { authorization: 'Bearer' } }), null, 'scheme with no token');
   assert.equal(extractBearer({ headers: { authorization: 'Bearer   ' } }), null, 'whitespace-only token');
   assert.equal(extractBearer({ headers: { authorization: 123 } }), null, 'non-string header');
+});
+
+// ── liveEmailVerification ──────────────────────────────
+// `email_verified` is frozen into the ID token at issue time, so verifying on a
+// second device leaves this claim stale for up to an hour. It gates the free
+// grant and every billed route, so a stale `false` strands a verified user at a
+// zero balance. The middleware reads Firebase's live record instead.
+test('liveEmailVerification: upgrades a stale false claim from the live record', async () => {
+  let lookups = 0;
+  __setUserLookup(async (uid) => { lookups++; return { uid, emailVerified: true }; });
+  const req = { user: { uid: 'u-1', email: 'a@b.co', emailVerified: false } };
+  const { nexted } = await runMw(liveEmailVerification(), req);
+  assert.equal(nexted, true);
+  assert.equal(req.user.emailVerified, true, 'claim should be upgraded');
+  assert.equal(lookups, 1);
+});
+
+test('liveEmailVerification: leaves a still-unverified account alone', async () => {
+  __setUserLookup(async (uid) => ({ uid, emailVerified: false }));
+  const req = { user: { uid: 'u-1', email: 'a@b.co', emailVerified: false } };
+  const { nexted } = await runMw(liveEmailVerification(), req);
+  assert.equal(nexted, true);
+  assert.equal(req.user.emailVerified, false);
+});
+
+// A true claim cannot be stale in the direction that matters, so the common
+// path must not pay for an Admin SDK round-trip on every request.
+test('liveEmailVerification: skips the lookup when the claim is already true', async () => {
+  let lookups = 0;
+  __setUserLookup(async (uid) => { lookups++; return { uid, emailVerified: true }; });
+  const req = { user: { uid: 'u-1', email: 'a@b.co', emailVerified: true } };
+  await runMw(liveEmailVerification(), req);
+  assert.equal(lookups, 0, 'a verified claim should cost no extra call');
+});
+
+test('liveEmailVerification: anonymous requests pass straight through', async () => {
+  let lookups = 0;
+  __setUserLookup(async () => { lookups++; return { emailVerified: true }; });
+  const req = { user: null };
+  const { nexted } = await runMw(liveEmailVerification(), req);
+  assert.equal(nexted, true);
+  assert.equal(lookups, 0);
+});
+
+// An Admin SDK outage must degrade to the pre-existing behaviour (trust the
+// token's claim), never to a 500 on a route the user is entitled to reach.
+test('liveEmailVerification: a lookup failure is non-fatal', async () => {
+  __setUserLookup(async () => { throw new Error('admin unavailable'); });
+  const req = { user: { uid: 'u-1', email: 'a@b.co', emailVerified: false } };
+  const { res, nexted } = await runMw(liveEmailVerification(), req);
+  assert.equal(nexted, true, 'the request must continue');
+  assert.equal(res.statusCode, 200, 'no error response written');
+  assert.equal(req.user.emailVerified, false, 'falls back to the token claim');
 });
