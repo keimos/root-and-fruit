@@ -225,8 +225,13 @@ app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhookHandler);
 
 app.use(express.json({ limit: '2mb' }));
+// Local-dev fallback, used only when ALLOWED_ORIGIN is unset. The frontend dev
+// server listens on 8080 (see "Local dev" in CLAUDE.md); a dev running it on
+// another port sets ALLOWED_ORIGIN explicitly.
+const DEV_ORIGINS = Object.freeze(['http://localhost:8080', 'http://127.0.0.1:8080']);
+
 /**
- * Parse ALLOWED_ORIGIN into a value the `cors` package accepts.
+ * Parse ALLOWED_ORIGIN into the origin allowlist handed to the `cors` package.
  *
  * A LIST, not a single string, because one deployment legitimately answers on
  * several origins: Cloud Run serves every service on two URL formats
@@ -235,14 +240,38 @@ app.use(express.json({ limit: '2mb' }));
  * other one gets a preflight whose Allow-Origin does not match, silently drops
  * the real request, and the app looks broken with nothing in the server logs
  * but an OPTIONS 204.
- * @param {string|undefined} raw  comma-separated origins, or '*'
- * @returns {string|string[]}  '*' when unset or wildcarded, else the origin list
+ *
+ * `*` is NOT supported — not as the default, and not as an explicit value.
+ * A wildcard here was only ever harmless by accident: nothing relies on ambient
+ * browser credentials today (auth is a Bearer ID token, and `credentials` is
+ * deliberately never enabled below), so `*` exposed nothing curl could not
+ * already reach. But that safety is incidental rather than structural — the
+ * first cookie or `credentials: true` added anywhere in this app would turn it
+ * into an account-takeover path, with nothing in that diff pointing back here.
+ * Unset falls back to DEV_ORIGINS, which keeps `npm run dev` working without a
+ * wildcard ever appearing in the source.
+ * @param {string|undefined} raw  comma-separated origins ('*' entries dropped)
+ * @returns {string[]}  a concrete origin allowlist, never a wildcard
  */
 function parseAllowedOrigins(raw) {
-  const list = String(raw || '*').split(',').map((s) => s.trim()).filter(Boolean);
-  return list.length === 0 || list.includes('*') ? '*' : list;
+  const list = String(raw || '').split(',').map((s) => s.trim()).filter((s) => s && s !== '*');
+  return list.length ? list : [...DEV_ORIGINS];
 }
 const ALLOWED_ORIGINS = parseAllowedOrigins(process.env.ALLOWED_ORIGIN);
+
+// Mirrors the APP_URL guard further down: ALLOWED_ORIGIN is optional, so a
+// deploy that drops it silently narrows CORS to localhost and every browser
+// request from the real frontend dies at its preflight — an OPTIONS 204 and no
+// server-side error. Say so at boot instead.
+const ALLOWED_ORIGINS_CONFIGURED =
+  ALLOWED_ORIGINS.length !== DEV_ORIGINS.length ||
+  ALLOWED_ORIGINS.some((origin, i) => origin !== DEV_ORIGINS[i]);
+if (!ALLOWED_ORIGINS_CONFIGURED && process.env.NODE_ENV === 'production') {
+  console.error(
+    'CONFIG ERROR: ALLOWED_ORIGIN is not set, so CORS admits only ' + DEV_ORIGINS.join(', ') + '. ' +
+    'Browser requests from the deployed frontend will fail their preflight.'
+  );
+}
 
 app.use(cors({
   origin: ALLOWED_ORIGINS,

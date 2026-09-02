@@ -86,11 +86,31 @@ test('parseAllowedOrigins: trims whitespace around entries', () => {
   );
 });
 
-test('parseAllowedOrigins: unset or wildcard stays fully open', () => {
-  assert.equal(parseAllowedOrigins(undefined), '*');
-  assert.equal(parseAllowedOrigins(''), '*');
-  assert.equal(parseAllowedOrigins('*'), '*');
-  assert.equal(parseAllowedOrigins('https://a.example.com,*'), '*', 'a wildcard anywhere wins');
+// A wildcard must never reach `cors({origin})`, however it is spelled. Unset
+// falls back to the local-dev origins so `npm run dev` still works; an explicit
+// '*' is dropped rather than honoured, so no deploy can reopen it by config.
+const DEV_ORIGINS = ['http://localhost:8080', 'http://127.0.0.1:8080'];
+
+test('parseAllowedOrigins: unset falls back to the local-dev origins', () => {
+  assert.deepEqual(parseAllowedOrigins(undefined), DEV_ORIGINS);
+  assert.deepEqual(parseAllowedOrigins(''), DEV_ORIGINS);
+});
+
+test('parseAllowedOrigins: an explicit wildcard is dropped, not honoured', () => {
+  assert.deepEqual(parseAllowedOrigins('*'), DEV_ORIGINS, 'a lone wildcard leaves nothing configured');
+  assert.deepEqual(
+    parseAllowedOrigins('https://a.example.com,*'),
+    ['https://a.example.com'],
+    'the real origin survives; the wildcard does not widen it'
+  );
+});
+
+test('parseAllowedOrigins: never returns a wildcard', () => {
+  for (const raw of [undefined, '', '*', ' * ', '*,*', 'https://a.example.com,*']) {
+    const out = parseAllowedOrigins(raw);
+    assert.ok(Array.isArray(out), `expected an array for ${JSON.stringify(raw)}`);
+    assert.ok(!out.includes('*'), `wildcard leaked for ${JSON.stringify(raw)}`);
+  }
 });
 
 test('parseAllowedOrigins: a single origin still works', () => {

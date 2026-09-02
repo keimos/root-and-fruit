@@ -22,6 +22,8 @@ const assert = require('node:assert/strict');
 
 // Ensure the AI proxies take their no-key branch regardless of the dev's shell.
 delete process.env.ANTHROPIC_API_KEY;
+// Same reason: the CORS assertions below expect the unset-ALLOWED_ORIGIN default.
+delete process.env.ALLOWED_ORIGIN;
 
 const app = require('../server');
 
@@ -65,9 +67,16 @@ test('GET /health returns ok with a timestamp', async () => {
   assert.equal(typeof body.ts, 'number');
 });
 
-test('CORS allows cross-origin by default (Access-Control-Allow-Origin: *)', async () => {
+// With ALLOWED_ORIGIN unset the app admits only the local-dev origins. The
+// wildcard default is gone deliberately: see parseAllowedOrigins in server.js.
+test('CORS admits the local-dev origin when ALLOWED_ORIGIN is unset', async () => {
+  const res = await fetch(`${base}/health`, { headers: { Origin: 'http://localhost:8080' } });
+  assert.equal(res.headers.get('access-control-allow-origin'), 'http://localhost:8080');
+});
+
+test('CORS does not admit an unlisted origin', async () => {
   const res = await fetch(`${base}/health`, { headers: { Origin: 'https://example.com' } });
-  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  assert.equal(res.headers.get('access-control-allow-origin'), null);
 });
 
 test('unknown route 404s', async () => {
