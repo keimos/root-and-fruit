@@ -51,6 +51,38 @@ function buildCsp(backendUrl) {
   ].join('; ');
 }
 
+/**
+ * Redirect a `www.` host to the bare apex, preserving path and query string.
+ *
+ * The app is served from ONE canonical origin on purpose. Both halves of a
+ * user's identity are origin-scoped: localStorage holds the per-browser
+ * `rfUserId` and the offline audit cache, and the Firebase session lives in
+ * IndexedDB under the same origin. Serving the same app at two hostnames
+ * silently splits a user across them — sign in at www, come back on the apex,
+ * and the app shows you signed out with a different local audit list.
+ *
+ * Backend calls would fail from www regardless: ALLOWED_ORIGIN lists the apex
+ * only, so a www page's preflight is rejected with no Access-Control-Allow-Origin
+ * and the real request never fires. Redirecting is what keeps that from becoming
+ * a silent, logless failure for anyone who types the www form.
+ *
+ * Mounted ahead of the security headers because this response carries no body
+ * and needs no CSP; the apex's HSTS already covers www via includeSubDomains.
+ * @param {import('express').Request} req   the incoming request
+ * @param {import('express').Response} res  the response (301 when the host is www)
+ * @param {import('express').NextFunction} next  pass-through for every other host
+ * @returns {void}  none (side effect: sends a 301 on a www host)
+ */
+function redirectWww(req, res, next) {
+  const host = req.headers.host || '';
+  if (!host.toLowerCase().startsWith('www.')) return next();
+  // Cloud Run terminates TLS and serves HTTPS only, so the scheme is not in
+  // doubt; req.protocol would read "http" behind the proxy and downgrade the
+  // redirect. slice(4) drops the leading "www." and keeps any :port.
+  res.redirect(301, `https://${host.slice(4)}${req.originalUrl}`);
+}
+app.use(redirectWww);
+
 // Security headers
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');

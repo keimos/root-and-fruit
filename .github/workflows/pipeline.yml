@@ -289,6 +289,15 @@ jobs:
         working-directory: frontend
         run: node test/justifications.mjs
 
+      # Guards the canonical-host redirect. www and the apex are separate
+      # origins, so serving both splits localStorage (rfUserId + offline cache)
+      # and the Firebase session — and only the apex is in ALLOWED_ORIGIN, so a
+      # www page's backend preflight is rejected with nothing in the logs.
+      # Pure HTTP; no Playwright needed.
+      - name: Run www redirect test
+        working-directory: frontend
+        run: node test/wwwRedirect.mjs
+
   # ── Build once: push SHA-tagged images to the shared registry ───────────
   # Runs on a push to any non-main branch (after the gates). Builds both images
   # on the runner and pushes them to the SHARED Artifact Registry repo tagged by

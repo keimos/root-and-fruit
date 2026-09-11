@@ -229,6 +229,10 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 
 `ALLOWED_ORIGIN` is optional, so a deploy that drops it narrows CORS to localhost and every real browser request dies at its preflight — an `OPTIONS 204` and nothing in the logs. The boot-time `CONFIG ERROR` guard (mirroring the `APP_URL` one) is what makes that loud.
 
+**One canonical host.** The deployed app answers on a single origin, and `redirectWww()` in `frontend/server.js` 301s `www.*` to the bare apex to keep it that way. Two hostnames serving the same app is not a cosmetic duplicate: `localStorage` (the per-browser `rfUserId` and the offline audit cache) and the Firebase session are both origin-scoped, so a user who signs in on one and returns on the other is silently a different person with a different saved-audit list. Adding the second host to `ALLOWED_ORIGIN` "fixes" the CORS symptom and locks the split identity in — redirect instead. Regression test: `frontend/test/wwwRedirect.mjs`.
+
+This was a live outage, not a hypothetical: the production custom domain ran for ~12 days absent from `ALLOWED_ORIGIN`, so every backend call from real users failed its preflight while Firebase Auth — which talks to Google directly, never through this backend — kept succeeding. The visible symptom was accounts appearing in Firebase Auth with no matching Firestore `accounts` doc, and **nothing whatsoever in the backend logs**. When a new hostname starts serving the app, `ALLOWED_ORIGIN` and `APP_URL` are part of that change.
+
 ### Upstream error contract
 
 `/api/analyze` and `/api/search` **never forward Anthropic's HTTP status or message** to the client. Every upstream failure becomes `502 {error: 'The AI service is unavailable right now. Please try again.'}` via `sendUpstreamFailure()`, with the real status/message logged server-side. The billing routes already do the same with Stripe errors.
