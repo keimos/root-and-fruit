@@ -17,7 +17,7 @@ The app supports manual audits (a human checks boxes / drags sliders), AI-assist
   - All app state lives in module-level JS variables in the inline `<script>`. Persistence is via `localStorage` (user ID + offline cache) and the backend (`/api/audits`).
 - **Backend:** Node 20 + Express. Dependencies kept tight: `@anthropic-ai/sdk`, `@google-cloud/firestore`, `cors`, `express`, `express-rate-limit` (per-route rate limiting), `firebase-admin` (ID-token verification for auth).
 - **AI integration:** Anthropic API via `@anthropic-ai/sdk`. Default model is `claude-opus-4-7` (override with `ANTHROPIC_MODEL`). Uses **adaptive thinking** + `web_search_20260209` tool (max 5 uses). System prompt is wrapped with `cache_control: ephemeral` so repeated audits start hitting the prompt cache once it grows past the model's minimum-prefix threshold.
-- **Storage:** Firestore Native, six collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), `registrations` (append-only splash-registration leads), `accounts` (uid-keyed; authoritative credit balance + profile), `credit_ledger` (append-only record of every balance change), and `stripe_events` (processed Stripe event ids; the idempotency guard for webhook redelivery).
+- **Storage:** Firestore Native, seven collections — `audits` (keyed by user), `shared_audits` (token-keyed, public-readable), `registrations` (append-only splash-registration leads), `accounts` (uid-keyed; authoritative credit balance + profile), `credit_ledger` (append-only record of every balance change), `stripe_events` (processed Stripe event ids; the idempotency guard for webhook redelivery), and `audit_cache` (subject-keyed shared AI audits — see [Shared audit cache](#shared-audit-cache)).
 - **Deploy:** Two stateless containers (`root-and-fruit-backend`, `root-and-fruit-frontend`) suitable for Cloud Run, Fly, Render, or any platform that runs a Node container and can wire `BACKEND_URL` into the frontend at runtime. **GitHub Actions CI/CD to Cloud Run is checked in** as a single gated pipeline at `.github/workflows/pipeline.yml` (PRs run tests + CodeQL + Docker build; merge to `main` re-runs them and then deploys, keyless via Workload Identity Federation) — see the [Deployment](#deployment) section. The app stays platform-agnostic; the workflow is the reference path, not a hard dependency.
 
 ---
@@ -210,7 +210,7 @@ Triggered by `autoAnalyze()`. Builds a system prompt via `buildAuditPrompt(targe
 | Method | Path                              | Behavior                                                  |
 |--------|-----------------------------------|-----------------------------------------------------------|
 | GET    | `/health`                         | `{status:"ok", ts}` — used by Cloud Run liveness          |
-| POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit.** Anthropic Messages proxy for the main audit. Body: `{messages, system, max_tokens?}`. Wraps `system` with `cache_control: ephemeral`, uses adaptive thinking + web_search. Streams to `finalMessage()`. Returns the full Anthropic message object, plus an `X-Credit-Balance` response header. 401 anonymous, 402 out of credits, **502 for any upstream (Anthropic) failure** — see [Upstream error contract](#upstream-error-contract). |
+| POST   | `/api/analyze`                    | **Signed-in only. Costs 1 credit — unless it is a cache hit, which is free.** Anthropic Messages proxy for the main audit. Body: structured subject fields `{name, subjectType, pathway, jurisdiction?, office?, year?, sponsor?, max_tokens?, refresh?}` — the locked prompt is assembled server-side (see [Locked Prompt](#locked-prompt--do-not-casually-modify)). Checks the [shared audit cache](#shared-audit-cache) first (`refresh: true` bypasses it); on a miss, wraps `system` with `cache_control: ephemeral` and uses adaptive thinking + web_search, streaming to `finalMessage()`. Returns the full Anthropic message object, plus `X-Credit-Balance` and `X-Audit-Cache: hit\|miss\|refresh` response headers. 401 anonymous, 402 out of credits, **502 for any upstream (Anthropic) failure** — see [Upstream error contract](#upstream-error-contract). |
 | POST   | `/api/search`                     | **Signed-in only.** Lighter web-search proxy for the **Legislative Scrubber** (costs 1 credit) and **Electability Rating** (free). Body: `{messages, system, max_tokens?=3000, max_uses?=4}`. **No** adaptive thinking (structured extract-from-search task); uses `messages.create` + web_search. Returns the full Anthropic message object. Keeps the key server-side just like `/api/analyze`. |
 | GET    | `/api/account`                    | **Signed-in only.** Returns `{account}` (see `publicAccount`, which also reports `emailVerified`). Creates the account doc on first call, and issues the one-time free grant on the first call where the token says the address is verified. |
 | POST   | `/api/account`                    | **Signed-in only.** Merges profile fields (`firstName`, `lastName`, `org`, `role`, `acceptedTerms`). Balances, plan, and Stripe ids are server-owned and **cannot** be set by a caller. |
@@ -263,7 +263,7 @@ Don't "improve" this by forwarding a status allowlist — the failure mode is on
 |------|-------|
 | Free tier | **3 credits, one-time, per registered account with a _verified_ email.** Not per browser — the anonymous `rfUserId` is a `localStorage` UUID that re-rolls on clear/incognito, so a quota keyed to it is unenforceable. Verification is the other half of that: an unverified Firebase account is just as cheap to re-mint (`you+2@…`), so a grant keyed to it would be equally unenforceable. Requiring the click makes each grant cost one real, deliverable inbox. |
 | Refresh | None. The free grant is issued at most once, guarded by `grantIssued()` re-checked inside the transaction. An account created before verification starts at **0** credits and is topped up on the first `/api/account` call after the link is clicked. |
-| AI audit (`/api/analyze`) | 1 credit |
+| AI audit (`/api/analyze`) | 1 credit — **0 on a [cache hit](#shared-audit-cache)**, since nothing was spent to produce it |
 | Legislative Scrubber (`task: 'scrubber'`) | 1 credit — explicit opt-in, and the UI already says it costs extra |
 | Electability Rating (`task: 'electability'`) | **Free** — it runs automatically for candidates, so a charge would be a surprise |
 | Free, no account | Manual scoring, saved audits, compare, share links |
@@ -283,6 +283,24 @@ Because subscription credits are permanent, **cancelling a subscription must nev
 **Collections:** `accounts/{uid}` (authoritative balance + profile) and `credit_ledger` (append-only; every balance change writes a row in the same transaction). The ledger needs a `(uid ASC, createdAt DESC)` composite index **only once something queries it** — nothing does yet, so no index is required today.
 
 > **Regression harness impact.** `frontend/test/regression.mjs` drives the real app's Auto-Analyze, which is now signed-in and billed. It signs in via `REGRESSION_USER_EMAIL` (repo/Environment **variable**) and `REGRESSION_USER_PASSWORD` (Actions **secret** — never a variable; variables are plaintext and unmasked in logs) and **fails fast** if they're unset. The dev account must exist in the Firebase project, have a **verified** address (unverified accounts receive no grant), and hold credits — the free grant covers only three runs, so top it up in Firestore.
+
+### Shared audit cache
+
+`backend/lib/auditCache.js` is a read-through cache in front of `/api/analyze`, stored in Firestore as `audit_cache/{docId}`. An Integrity Index audit of a given subject is the same report for every user, so the second person to audit that subject is served the first person's result — **no Anthropic call, and no credit debited**. This is what makes the Ballot Builder (10–30 candidates in one sitting) possible to price at all; it also cuts latency on the common case to a single document read.
+
+**What is in the key** (`keyFor()`, built on the previously-unused `lib/cacheKey.js`): the normalized subject, `subjectType`, `pathway` (candidates only — carrying it into a policy key would split one policy audit in two), `jurisdiction` / `office` / `year` / `sponsor`, the `MODEL`, and `PROMPT_VERSION`. That last one is a hash of the locked prompt text itself, computed at boot from `analyzeSystem()` plus all three `buildAuditPrompt` variants — so **editing the locked prompt retires every audit scored under the old rubric automatically**. A rubric change that stayed silently undone for 30 days by cached audits would be the worst possible outcome of the caching work; nobody has to remember to flush.
+
+Every extra dimension is pushed through `normalizeSubject()` before hashing. That is load-bearing, not tidiness: the fields are raw user input and `cacheKey` joins dimensions with a NUL separator, so normalization (which strips NUL) is what stops a crafted `jurisdiction` from forging another subject's hash material and poisoning its entry.
+
+Rules that the tests pin (`backend/test/auditCache.test.js`, plus the cache cases in `analyze.integration.test.js` and `frontend/test/auditCache.mjs`):
+
+- **Only the AI baseline is cached** — never a user's adjusted scores or justifications. The document is global; one user's edits leaking into it would show up in everyone else's audit.
+- **Only a schema-valid audit is cached** (`validateAudit().ok`). Otherwise one malformed response becomes a month of malformed responses. The caller still gets their audit either way.
+- **A hit is free, but the verification gate still runs first.** `billableAllowed()` is checked *before* the cache read, so an unverified throwaway account cannot mine the cache as an unmetered public report API.
+- **The cache is an optimization, never a dependency.** Every Firestore call is wrapped in a 3s timeout + try/catch: a read error or a hung read degrades to a miss (the audit runs and is billed normally), and a write error is logged and swallowed. A Firestore outage must slow audits down, not stop them.
+- **The UI says when a report is cached.** `showCacheNotice()` surfaces the audit's date plus a "Run a fresh audit (1 credit)" button, which re-requests with `refresh: true`. Serving a weeks-old report as if it were fresh — on a tool people use to decide a vote — is not acceptable, and the free-of-charge path is exactly the one with no other signal that it happened.
+
+Reads are by document id, so no index is needed. Nothing expires the documents server-side; the TTL is enforced on read, and Firestore's native TTL policy on `createdAtMs` can be added later as housekeeping.
 
 ### Authentication (Firebase — additive)
 
@@ -327,6 +345,7 @@ anthropic.messages.stream({
 | `DONATION_URL`          | no      | Donation CTA link in the registrant auto-reply email. If unset, the auto-reply omits the donation line entirely (rather than shipping a placeholder). Set to the live donation URL (e.g. `https://anvilinstitute.org/give`) in production. |
 | `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | yes (in production) | Firestore client uses this. Cloud Run injects it automatically. |
 | `ALLOWED_ORIGIN`        | no      | CORS origin allowlist — a **comma-separated list**. Unset falls back to the local-dev origins (`http://localhost:8080`, `http://127.0.0.1:8080`) and logs a `CONFIG ERROR` when `NODE_ENV=production`; `*` is **not** accepted and is stripped if supplied. Cloud Run serves each service on two URL formats (`<svc>-<hash>-<region>.a.run.app` and `<svc>-<projectNumber>.<region>.run.app`); listing only one means a browser on the other has its preflight rejected and its real request silently dropped. |
+| `AUDIT_CACHE_TTL_DAYS`  | no      | How long a cached AI audit stays servable. Defaults to `30`. **`0` disables the cache entirely** — a kill switch that needs no code change. |
 | `RATE_LIMIT_AI`         | no      | Max `/api/analyze` + `/api/search` requests per window per client IP. Defaults to `15`.       |
 | `RATE_LIMIT_REGISTER`   | no      | Max `/api/register` requests per window per client IP. Defaults to `5`.                       |
 | `RATE_LIMIT_API`        | no      | Blanket cap over the rest of `/api/*` per window per client IP. Defaults to `100`.           |
@@ -383,7 +402,7 @@ Deployment targets **two stateless containers** (`root-and-fruit-backend`, `root
 
 The non-negotiable wiring:
 
-1. Provision a Firestore (or Firestore-compatible) database. The app uses six collections: `audits`, `shared_audits`, `registrations`, `accounts`, `credit_ledger`, and `stripe_events`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations`, `credit_ledger`, and `stripe_events` are append-only, and `accounts` is read by document id, so none of them need an index today (a ledger listing UI would need `(uid ASC, createdAt DESC)`). The webhook does query `accounts` by `stripeCustomerId`, which Firestore's automatic single-field index already covers.
+1. Provision a Firestore (or Firestore-compatible) database. The app uses seven collections: `audits`, `shared_audits`, `registrations`, `accounts`, `credit_ledger`, `stripe_events`, and `audit_cache`. The `audits` collection needs a **composite index on `(userId ASC, createdAt DESC)`** — Firestore will refuse the listing query otherwise. `registrations`, `credit_ledger`, and `stripe_events` are append-only, and `accounts` and `audit_cache` are read by document id, so none of them need an index today (a ledger listing UI would need `(uid ASC, createdAt DESC)`). The webhook does query `accounts` by `stripeCustomerId`, which Firestore's automatic single-field index already covers.
 
 **Stripe prerequisites (per project, before the first deploy that mounts them).** Secret Manager secrets are project-scoped, so **dev and prod each need their own** `stripe-secret-key` and `stripe-webhook-secret` — with test-mode values in dev and live-mode values in prod. Both deploy jobs pass them via `--set-secrets`, so a missing secret **fails the deploy**. Gotchas that cost real debugging time:
 - Store values with `printf '%s'`, never `echo` or a bare `jq -r` pipe — a trailing newline is invisible in the console and makes webhook signature verification fail with "No signatures found matching the expected signature".
@@ -527,6 +546,18 @@ function escapeHtml(v) { /* … */ }
 
 ---
 
+## Working Conventions
+
+### Finish with a commit message (required)
+
+Every completed unit of work ends with a **ready-to-paste commit message**, provided without being asked. The work is handed over to be committed by a human, so the message is part of the deliverable.
+
+Match the shape of this repo's history (`git log`): a Conventional Commits subject (`feat:` / `fix:`), a short paragraph on **why** before any list of what changed, bullets naming the file or function plus the reasoning behind the non-obvious calls, then a tests line and a docs line. The commits here are deliberately explanatory — they carry the reasoning that would otherwise only exist in a closed PR tab — so a one-line message is a regression against that standard.
+
+Write it to a file as well as showing it, so it can be used with `git commit -F <path>` instead of fighting shell quoting. **Do not run `git commit` unless explicitly asked**, and never add attribution or `Co-authored-by` trailers.
+
+---
+
 ## Styling Conventions
 
 - All styles are in a `<style>` block at the top of `index.html`. CSS custom properties (CSS variables) define the palette under `:root`.
@@ -592,5 +623,9 @@ Two backend handlers talk to Anthropic: `/api/analyze` (`anthropic.messages.stre
 - **Do not** alter the verdict thresholds, section maxima, or 57-point total without updating the verdict labels, share-card layout, and methodology copy together.
 - **Do not** introduce session affinity, in-memory caching, or sticky sessions on Cloud Run — both services are stateless.
 - **Do not** remove the cache-control wrapping around the system prompt in `/api/analyze`. It is a no-op below the threshold and a free win above it.
+- **Do not** put a user's adjusted scores, justifications, or any per-user state into `audit_cache` — the document is shared with every other user of that subject. Only the AI baseline belongs there.
+- **Do not** cache an audit that failed `validateAudit()`, and do not move the cache read ahead of `billableAllowed()`. The first turns one bad response into a month of them; the second turns the cache into an unmetered public report API for unverified accounts.
+- **Do not** let a cache failure fail an audit. Reads and writes are wrapped in a timeout + try/catch on purpose: Firestore being down must cost latency, never the audit.
+- **Do not** serve a cached audit without showing its date. A free, instant report that is silently weeks old is the one case where the user has no other signal, on a tool people use to decide a vote.
 - **Do not** remove `localStorage` use from the frontend. It powers the per-browser user ID and the offline-fallback save path — both are intentional. (CivicSorter's no-localStorage rule does **not** apply here.)
 - **Do not** add a function without a doc comment stating its purpose, inputs, and outputs — see [Code Conventions](#code-conventions). This is required for every new or meaningfully-changed function on all surfaces.

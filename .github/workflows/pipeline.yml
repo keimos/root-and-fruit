@@ -289,6 +289,14 @@ jobs:
         working-directory: frontend
         run: node test/justifications.mjs
 
+      # Guards the shared-audit-cache contract in the UI: an audit the backend
+      # served from cache (and did not charge for) must show its date rather
+      # than pass as fresh, and "Run a fresh audit" must actually send
+      # refresh:true — the flag that bypasses the cache and bills the call.
+      - name: Run audit cache UI test
+        working-directory: frontend
+        run: node test/auditCache.mjs
+
       # Guards the canonical-host redirect. www and the apex are separate
       # origins, so serving both splits localStorage (rfUserId + offline cache)
       # and the Firebase session — and only the apex is in ALLOWED_ORIGIN, so a

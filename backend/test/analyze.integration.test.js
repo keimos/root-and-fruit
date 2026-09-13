@@ -17,9 +17,16 @@
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
+// This file now drives more than the default 15 AI requests per minute (the
+// cache cases need several audits each). The limiter itself is covered by
+// rateLimit.test.js, so lift it here rather than let it trip mid-suite. Must be
+// set before requiring the server — buildLimiters() reads env at load time.
+process.env.RATE_LIMIT_AI = '500';
+
 const app = require('../server');
 const prompts = require('../lib/prompts');
 const { creditCost, InsufficientCreditsError } = require('../lib/credits');
+const auditCacheLib = require('../lib/auditCache');
 
 // A schema-valid audit the mock returns as the model's output.
 const VALID_AUDIT = {
@@ -60,6 +67,26 @@ const fakeCredits = {
   },
 };
 
+// In-memory stand-in for lib/auditCache, keyed by the real keyFor() so the
+// route's hit/miss behaviour is exercised without Firestore. Always-miss by
+// default, which is exactly how every pre-cache test expects the route to act.
+const fakeCache = {
+  store: new Map(),
+  reads: [],
+  writes: [],
+  async get(fields) {
+    fakeCache.reads.push(fields);
+    const { docId } = auditCacheLib.keyFor(fields);
+    return fakeCache.store.get(docId) || null;
+  },
+  async put(fields, audit) {
+    const { docId } = auditCacheLib.keyFor(fields);
+    fakeCache.writes.push({ docId, audit });
+    fakeCache.store.set(docId, { audit, createdAtMs: Date.now(), docId });
+    return true;
+  },
+};
+
 /** Restore the happy-path Anthropic mock (also used to undo a per-test failure mock). */
 function mockAnthropicOk() {
   app.__setAnthropic({
@@ -73,17 +100,25 @@ before(async () => {
   mockAnthropicOk();
   app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
   app.__setCredits(fakeCredits);
+  app.__setAuditCache(fakeCache);
   await new Promise((resolve) => {
     server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; resolve(); });
   });
 });
 
-beforeEach(() => { charges = []; fakeCredits.balance = 5; });
+beforeEach(() => {
+  charges = [];
+  fakeCredits.balance = 5;
+  fakeCache.store.clear();
+  fakeCache.reads = [];
+  fakeCache.writes = [];
+});
 
 after(async () => {
   app.__setAnthropic(null); // restore the no-key state for any later use
   app.__setAuthVerifier(null);
   app.__setCredits(null);
+  app.__setAuditCache(null);
   await new Promise((resolve) => server.close(resolve));
 });
 
@@ -179,6 +214,84 @@ test('/api/analyze does not debit when the request fails validation', async () =
   assert.equal(res.status, 400);
   assert.equal(charges.length, 0);
   assert.equal(fakeCredits.balance, 5);
+});
+
+// ── shared audit cache ─────────────────────────────────
+// The economics of the Ballot Builder rest on this: the same subject audited
+// twice must cost one Opus call, and the second caller must not be billed for a
+// report nothing was spent to produce.
+test('a cache miss runs the audit, bills it, and stores the result', async () => {
+  const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-audit-cache'), 'miss');
+  assert.equal(charges.length, 1, 'a miss is billed');
+  assert.equal(fakeCache.writes.length, 1, 'the audit is cached for the next caller');
+  assert.deepEqual(JSON.parse(fakeCache.writes[0].audit), VALID_AUDIT);
+});
+
+test('a cache hit serves the stored audit without calling Anthropic or debiting', async () => {
+  await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+  charges = [];
+  captured = null;
+
+  const res = await post('/api/analyze', { name: '  ada  ', subjectType: 'candidate', pathway: 'elected' });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-audit-cache'), 'hit');
+  assert.equal(captured, null, 'the model was never called');
+  assert.equal(charges.length, 0, 'a hit is free — nothing was spent to produce it');
+  assert.equal(fakeCredits.balance, 4, 'only the first, billed audit moved the balance');
+
+  const body = await res.json();
+  assert.equal(body.cached, true);
+  assert.ok(body.cachedAt, 'the age of the cached audit is reported');
+  assert.deepEqual(JSON.parse(body.content[0].text), VALID_AUDIT, 'shape-identical to a live call');
+});
+
+test('refresh:true bypasses the cache and pays for a fresh audit', async () => {
+  await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+  charges = [];
+  captured = null;
+
+  const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected', refresh: true });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-audit-cache'), 'refresh');
+  assert.equal(fakeCache.reads.length, 1, 'the cache was not read on the refresh');
+  assert.ok(captured, 'the model ran again');
+  assert.deepEqual(charges.map((c) => c.kind), ['analyze']);
+});
+
+// A malformed audit would otherwise be served to every later caller for the
+// full TTL — one bad response becoming a month of bad responses.
+test('a schema-invalid audit is served but never cached', async () => {
+  const bad = JSON.parse(JSON.stringify(VALID_AUDIT));
+  bad.fruit[0].score = 99;
+  app.__setAnthropic({
+    messages: {
+      stream: () => ({ finalMessage: async () => ({ ...FAKE_MESSAGE, content: [{ type: 'text', text: JSON.stringify(bad) }] }) }),
+    },
+  });
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+    assert.equal(res.status, 200, 'the caller still gets their audit');
+    assert.equal(fakeCache.writes.length, 0, 'but it is not cached for anyone else');
+  } finally {
+    mockAnthropicOk();
+  }
+});
+
+// A hit is free, but only for an account that could have paid for one. Dropping
+// the verification gate ahead of the cache would turn it into an unmetered
+// public report API for throwaway accounts.
+test('the verification gate still runs ahead of the cache', async () => {
+  await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+  app.__setAuthVerifier(async () => ({ uid: 'u-new', email: 'a@b.com', email_verified: false }));
+  try {
+    const res = await post('/api/analyze', { name: 'Ada', subjectType: 'candidate', pathway: 'elected' });
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).code, 'email_unverified');
+  } finally {
+    app.__setAuthVerifier(async () => ({ uid: 'u-test', email: 'a@b.com', email_verified: true }));
+  }
 });
 
 /** Make the Anthropic mock throw an error carrying `status`. in: status (number|undefined), msg (string)  out: void */

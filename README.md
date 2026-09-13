@@ -203,7 +203,7 @@ gcloud run deploy root-and-fruit-frontend \
 
 Wiring notes:
 
-1. Provision Firestore (Native). Collections: `audits`, `shared_audits`. Add the
+1. Provision Firestore (Native). Collections: `audits`, `shared_audits`, `audit_cache`. Add the
    composite index on `audits (userId ASC, createdAt DESC)`.
 2. Backend needs `ANTHROPIC_API_KEY` (from a secret store), Firestore read/write
    credentials, and `GOOGLE_CLOUD_PROJECT`. AI requests can take tens of seconds —

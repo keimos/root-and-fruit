@@ -1803,6 +1803,16 @@
           </div>
         </div>
 
+        <!-- Shown when the backend served this audit from the shared cache.
+             A cached report costs no credit, but the user has to know they are
+             reading a record as of a past date and be able to refresh it. -->
+        <div id="cacheNotice" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:4px;font-size:12px;color:var(--text-dim);">
+          <span><i class="fa-solid fa-clock-rotate-left" style="color:var(--gold);margin-right:6px;"></i>Existing audit from <strong id="cacheNoticeDate">—</strong>. No credit used.</span>
+          <button onclick="autoAnalyze({refresh:true})" style="background:none;border:1px solid var(--border-light);border-radius:3px;padding:4px 10px;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);cursor:pointer;">
+            Run a fresh audit (1 credit)
+          </button>
+        </div>
+
         <div id="confidenceWrap" class="confidence-wrap" style="display:none;">
           <div class="confidence-label">Evidence Quality</div>
           <div class="confidence-track"><div class="confidence-fill" id="confidenceFill"></div></div>
@@ -2732,7 +2742,35 @@ RETURN JSON ONLY:
 }
 // ── END LOCKED PROMPT ────────────────────────────────────────────────
 
-async function autoAnalyze() {
+/**
+ * Show or hide the "existing audit" notice above the Evidence Quality bar.
+ *
+ * The backend serves a previously-run audit of the same subject from a shared
+ * cache and does not charge for it. That is only honest if the age is visible
+ * and a fresh run is one click away, so both live here.
+ * @param {object|null} data  the /api/analyze response (its `cached` +
+ *        `cachedAt` fields), or null to hide the notice
+ * @returns {void}  none (side effect: DOM mutation)
+ */
+function showCacheNotice(data) {
+  const box = document.getElementById('cacheNotice');
+  if (!box) return;
+  if (!data || !data.cached) { box.style.display = 'none'; return; }
+  const when = data.cachedAt ? new Date(data.cachedAt) : null;
+  document.getElementById('cacheNoticeDate').textContent =
+    when && !isNaN(when) ? when.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'an earlier run';
+  box.style.display = 'flex';
+}
+
+/**
+ * Run the AI audit for the subject currently in the form.
+ * @param {{refresh?: boolean}} [opts]  refresh: bypass the backend's shared
+ *        audit cache and pay for a fresh look (the "Run a fresh audit" button)
+ * @returns {Promise<void>}  none (side effects: /api/analyze call, form
+ *          animation, report render, Electability/Scrubber kickoff)
+ */
+async function autoAnalyze(opts = {}) {
+  const refresh = opts && opts.refresh === true;
   const name = document.getElementById('nameInput').value.trim();
   if (!name) { showToast('Enter a name first'); return; }
   // AI audits are billed, so they require a signed-in account. Manual scoring,
@@ -2753,6 +2791,7 @@ async function autoAnalyze() {
   document.getElementById('errorBox').style.display = 'none';
   document.getElementById('auditBox').style.display = 'none';
   document.getElementById('confidenceWrap').style.display = 'none';
+  showCacheNotice(null);
   document.getElementById('electabilityCard').style.display = 'none';
   document.getElementById('scrubberSection').style.display = 'none';
   document.getElementById('errorBoxReport').style.display = 'none';
@@ -2773,7 +2812,10 @@ async function autoAnalyze() {
         office,
         year,
         sponsor,
-        max_tokens: 16000
+        max_tokens: 16000,
+        // Only sent when the user explicitly asks for a fresh look — a normal
+        // audit is happy to be served from the shared cache for free.
+        ...(refresh ? { refresh: true } : {})
       })
     });
 
@@ -2790,6 +2832,10 @@ async function autoAnalyze() {
     // also filters to real text blocks, skipping thinking/tool_use blocks.
     const parsed = extractJSON(messageText(data));
     lastAnalysisData = parsed;
+    // The backend flags an audit it served from the shared cache. Say so — the
+    // report may be weeks old, and the user has a right to know that before
+    // they act on it.
+    showCacheNotice(data);
     await applyAnalysis(parsed);
 
     // Reveal the report + refresh the Results view in place (user stays on Results)
@@ -4638,6 +4684,7 @@ function resetAll() {
   setDisp('reportElectabilitySection', 'none');
   setDisp('electabilityCard', 'none');
   setDisp('confidenceWrap', 'none');
+  setDisp('cacheNotice', 'none');
   setDisp('errorBoxReport', 'none');
   const scrubCB = document.getElementById('scrubberOptIn');
   if (scrubCB) scrubCB.checked = false;

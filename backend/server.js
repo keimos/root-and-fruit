@@ -15,6 +15,7 @@ const auth = require('./lib/auth');
 const creditsLib = require('./lib/credits');
 const plansLib = require('./lib/plans');
 const stripeEvents = require('./lib/stripeEvents');
+const auditCacheLib = require('./lib/auditCache');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -206,6 +207,13 @@ const COLLECTION = 'audits';
 // Anthropic call. `let` (not const) so tests can inject a fake via __setCredits.
 let credits = creditsLib.createCredits(db);
 
+// ── Shared audit cache ─────────────────────────────────
+// A read-through cache over /api/analyze: the same subject audited twice costs
+// one Opus call, not two. Passing null when no project is configured keeps the
+// cache dormant locally and in tests rather than dialling a Firestore that
+// isn't there. `let` so tests can inject a fake via __setAuditCache.
+let auditCache = auditCacheLib.createAuditCache(PROJECT_ID ? db : null);
+
 // ── Middleware ─────────────────────────────────────────
 // Cloud Run terminates TLS at Google's front end and forwards the real client
 // IP in X-Forwarded-For. Trust that single proxy hop so the rate limiter keys
@@ -280,7 +288,11 @@ app.use(cors({
   // The billed routes report the post-debit balance in a header so the UI can
   // update its counter without a second round-trip. Cross-origin readers only
   // see custom headers that are explicitly exposed.
-  exposedHeaders: ['X-Credit-Balance']
+  // X-Audit-Cache is diagnostic (hit/miss/refresh). The UI reads the `cached`
+  // flag off the JSON body, not this — but an unexposed header is invisible to
+  // the browser, so expose it rather than leave a header that silently isn't
+  // there for whoever next opens devtools to work out why an audit was free.
+  exposedHeaders: ['X-Credit-Balance', 'X-Audit-Cache']
 }));
 
 // ── Rate limiting (Option A: per-instance in-memory backstop) ──
@@ -470,9 +482,31 @@ app.post('/api/analyze', limiters.ai, auth.requireAuth(), auth.liveEmailVerifica
   // prefix grows past the model's minimum threshold (a no-op below it).
   const systemBlocks = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
 
+  if (!billableAllowed(req, res, 'analyze')) return;
+
+  // Read-through cache. An audit of the same subject is the same report for
+  // every user, so a hit is served from Firestore and is NOT debited — nothing
+  // was spent to produce it. The verification gate above still runs first, so a
+  // throwaway account cannot mine the cache for free reports.
+  //
+  // `refresh: true` (the UI's "re-audit" affordance) bypasses the read and pays
+  // full price for a fresh look at a subject whose record may have moved.
+  const cacheFields = {
+    name: name.trim(), subjectType, pathway, jurisdiction, office, year, sponsor, model: MODEL
+  };
+  const wantsFresh = req.body.refresh === true;
+  if (!wantsFresh) {
+    const hit = await auditCache.get(cacheFields);
+    if (hit) {
+      console.log('Audit cache hit:', { subject: name.trim(), age_days: +((Date.now() - hit.createdAtMs) / 86400000).toFixed(1) });
+      res.setHeader('X-Audit-Cache', 'hit');
+      return res.json(auditCacheLib.asMessage(hit, MODEL));
+    }
+  }
+  res.setHeader('X-Audit-Cache', wantsFresh ? 'refresh' : 'miss');
+
   // Reserve the credit before spending money on the model. A 402 here is what
   // drives the upsell in the UI; the charge is reversed below if Anthropic fails.
-  if (!billableAllowed(req, res, 'analyze')) return;
   let charge;
   try {
     charge = await credits.debit(req.user.uid, { kind: 'analyze', ref: name.trim() });
@@ -524,6 +558,15 @@ app.post('/api/analyze', limiters.ai, auth.requireAuth(), auth.liveEmailVerifica
     } else {
       const v = prompts.validateAudit(parsedAudit);
       if (!v.ok) console.warn('Audit output failed schema validation:', v.errors);
+      // Cache only a schema-valid audit — a malformed one would be served to
+      // every later caller for the full TTL. Re-serializing the PARSED object
+      // (not the raw text) drops any prose preamble the model left around the
+      // JSON, so a cache hit is always clean. Fire-and-forget: a slow or failed
+      // write must not delay or fail an audit the user already paid for.
+      if (v.ok) {
+        auditCache.put(cacheFields, JSON.stringify(parsedAudit))
+          .catch((e) => console.warn('Audit cache write failed:', e.message));
+      }
     }
 
     if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
@@ -985,6 +1028,11 @@ module.exports.__setAnthropic = (client) => { anthropic = client; };
 // Test-only: inject a fake credit store so the billed routes can be tested
 // without Firestore. Pass null to restore the real one. Never called in prod.
 module.exports.__setCredits = (fake) => { credits = fake || creditsLib.createCredits(db); };
+// Test-only: inject a fake audit cache so cache hit/miss behaviour can be tested
+// without Firestore. Pass null to restore the real one. Never called in prod.
+module.exports.__setAuditCache = (fake) => {
+  auditCache = fake || auditCacheLib.createAuditCache(PROJECT_ID ? db : null);
+};
 // Test-only: inject a mock Stripe client so the webhook route can be tested
 // without live keys. Never called in prod.
 module.exports.__setStripe = (client) => { stripe = client; };
