@@ -209,10 +209,19 @@ let credits = creditsLib.createCredits(db);
 
 // ── Shared audit cache ─────────────────────────────────
 // A read-through cache over /api/analyze: the same subject audited twice costs
-// one Opus call, not two. Passing null when no project is configured keeps the
-// cache dormant locally and in tests rather than dialling a Firestore that
-// isn't there. `let` so tests can inject a fake via __setAuditCache.
-let auditCache = auditCacheLib.createAuditCache(PROJECT_ID ? db : null);
+// one Opus call, not two. `let` so tests can inject a fake via __setAuditCache.
+//
+// This deliberately does NOT gate on PROJECT_ID. It used to, on the assumption
+// (which CLAUDE.md also recorded) that Cloud Run injects GOOGLE_CLOUD_PROJECT.
+// It does not — that is App Engine / Cloud Functions behaviour; Cloud Run
+// serves the project id from the metadata server instead, which is why the
+// Firestore client works without it and nothing else ever noticed. The result
+// was a cache that reported itself healthy and silently did nothing in both
+// deployed environments: every audit billed a credit, wrote no document, and
+// logged not one line, because the disabled path is the only one that cannot
+// warn. Tests stay off Firestore by injecting a fake (__setAuditCache), not by
+// having production infer its own configuration from an env var nobody sets.
+let auditCache = auditCacheLib.createAuditCache(db);
 
 // ── Middleware ─────────────────────────────────────────
 // Cloud Run terminates TLS at Google's front end and forwards the real client
@@ -1007,7 +1016,18 @@ app.get('/api/share/:token', async (req, res) => {
 // the test suite, the app is exported instead so tests can mount it on an
 // ephemeral port without booting the production listener.
 if (require.main === module) {
-  app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`Backend running on port ${PORT}`);
+    // Say out loud whether the audit cache is live. A dormant cache is
+    // invisible from outside — every audit simply runs and bills, exactly as it
+    // did before the cache existed — so without this line "switched itself off"
+    // and "working" produce identical logs, identical responses, and an
+    // identical Anthropic bill. That is how the PROJECT_ID guard shipped
+    // green through a full test suite and a deploy.
+    console.log('Audit cache:', auditCache.enabled
+      ? `enabled (ttl ${auditCacheLib.TTL_MS / 86400000}d, prompt ${auditCacheLib.PROMPT_VERSION})`
+      : 'DISABLED — every audit will call Anthropic and bill a credit');
+  });
 }
 
 module.exports = app;
@@ -1031,8 +1051,12 @@ module.exports.__setCredits = (fake) => { credits = fake || creditsLib.createCre
 // Test-only: inject a fake audit cache so cache hit/miss behaviour can be tested
 // without Firestore. Pass null to restore the real one. Never called in prod.
 module.exports.__setAuditCache = (fake) => {
-  auditCache = fake || auditCacheLib.createAuditCache(PROJECT_ID ? db : null);
+  auditCache = fake || auditCacheLib.createAuditCache(db);
 };
+// Test-only: report whether the live cache wiring is enabled. Exists to pin the
+// bug where the cache was gated on GOOGLE_CLOUD_PROJECT — a var Cloud Run does
+// not set — and so shipped switched off, silently, past a green suite.
+module.exports.__auditCacheEnabled = () => auditCache.enabled;
 // Test-only: inject a mock Stripe client so the webhook route can be tested
 // without live keys. Never called in prod.
 module.exports.__setStripe = (client) => { stripe = client; };

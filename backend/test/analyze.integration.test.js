@@ -217,6 +217,24 @@ test('/api/analyze does not debit when the request fails validation', async () =
 });
 
 // ── shared audit cache ─────────────────────────────────
+// The cache was originally wired as createAuditCache(PROJECT_ID ? db : null),
+// on the belief that Cloud Run injects GOOGLE_CLOUD_PROJECT. It does not — that
+// is App Engine / Cloud Functions — so the cache shipped switched off in both
+// deployed environments and nothing said a word: every audit ran, billed a
+// credit, wrote no document, and logged nothing, because the disabled path is
+// the only one that cannot warn. Caught by a dev soak, not by this suite, which
+// injects a fake and so never exercised the real wiring. This asserts the
+// wiring itself, with GOOGLE_CLOUD_PROJECT unset exactly as it is on Cloud Run.
+test('the live cache wiring is enabled without GOOGLE_CLOUD_PROJECT', () => {
+  assert.equal(process.env.GOOGLE_CLOUD_PROJECT, undefined, 'precondition: the var Cloud Run does not set');
+  try {
+    app.__setAuditCache(null); // restore the real wiring
+    assert.equal(app.__auditCacheEnabled(), true, 'the cache must not disable itself on a missing project id');
+  } finally {
+    app.__setAuditCache(fakeCache);
+  }
+});
+
 // The economics of the Ballot Builder rest on this: the same subject audited
 // twice must cost one Opus call, and the second caller must not be billed for a
 // report nothing was spent to produce.
