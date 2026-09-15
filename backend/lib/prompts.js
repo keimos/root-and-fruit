@@ -428,59 +428,6 @@ function validateBallot(obj) {
   return { ok: errors.length === 0, errors };
 }
 
-/**
- * Assemble a full ballot-lookup request from validated location fields.
- *
- * Sibling of buildSearchRequest, deliberately NOT a SEARCH_TASKS entry: that
- * table is the fixed capability list for /api/search and takes only a subject
- * name, while a ballot lookup takes a location and answers on a different
- * contract. Keeping them apart leaves that table's guarantee intact.
- * @param {object} loc  validated location (see buildBallotPrompt)
- * @returns {{system: string, messages: Array, maxUses: number}}  request pieces
- */
-function buildBallotRequest(loc) {
-  const system = DELIMIT_SUBJECT ? BALLOT_SYSTEM + ANTI_INJECTION_SUFFIX : BALLOT_SYSTEM;
-  return {
-    system,
-    // A ballot spans several offices across several official sources, so this
-    // needs more search rounds than a single-subject lookup.
-    messages: [{ role: 'user', content: buildBallotPrompt(loc) }],
-    maxUses: 5,
-  };
-}
-
-/**
- * Validate a parsed ballot against the shape the frontend will render.
- *
- * Non-blocking in the same spirit as validateAudit: the caller logs failures
- * rather than discarding the model's work. What it exists to catch is a
- * response reshaped by an injected instruction, and races with no candidates.
- * @param {*} obj  parsed model output
- * @returns {{ok: boolean, errors: string[]}}  validity plus readable reasons
- */
-function validateBallot(obj) {
-  const errors = [];
-  if (!obj || typeof obj !== 'object') return { ok: false, errors: ['not an object'] };
-  if (!Array.isArray(obj.races)) {
-    errors.push('races must be an array');
-  } else {
-    obj.races.forEach((r, i) => {
-      if (!r || typeof r.office !== 'string' || !r.office.trim()) errors.push(`races[${i}]: office required`);
-      if (!Array.isArray(r.candidates)) {
-        errors.push(`races[${i}]: candidates must be an array`);
-      } else {
-        r.candidates.forEach((c, j) => {
-          if (!c || typeof c.name !== 'string' || !c.name.trim()) errors.push(`races[${i}].candidates[${j}]: name required`);
-        });
-      }
-    });
-  }
-  if (obj.confidence != null && !(Number.isFinite(obj.confidence) && obj.confidence >= 0 && obj.confidence <= 100)) {
-    errors.push('confidence must be 0-100');
-  }
-  return { ok: errors.length === 0, errors };
-}
-
 module.exports = {
   buildAuditTarget, buildAuditPrompt, analyzeSystem, ANALYZE_SYSTEM, DELIMIT_SUBJECT,
   parseAuditFromMessage, validateAudit,

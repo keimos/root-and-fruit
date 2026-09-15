@@ -115,6 +115,12 @@ try {
   // Firebase's auth listener resolves asynchronously; give it a beat to fire.
   await sleep(1200);
 
+  // A wrong SRI hash fails silently — the account card still renders, auth just
+  // never initializes — so assert the hashed CDN scripts actually executed.
+  ok(
+    await page.evaluate(() => typeof firebase === 'object' && !!firebaseAuth && !!(window.jspdf && window.jspdf.jsPDF)),
+    'CDN scripts pass their integrity checks (Firebase + jsPDF loaded)'
+  );
   ok(await visible(page, '#splashAuthWrap'), 'account card shows first');
   ok(!(await visible(page, '#splashOnboardWrap')), 'onboarding is hidden behind it');
   ok(
@@ -236,6 +242,15 @@ try {
   }));
   await page.route('**/firebasejs/**/firebase-auth-compat.js', (route) =>
     route.fulfill({ contentType: 'application/javascript', body: '' }));
+  // The real tags carry SRI hashes, which (correctly) reject the stubs above.
+  // Strip them from THIS page's HTML only; every other case loads the hashed
+  // originals, so the hashes themselves stay exercised.
+  await page.route(`${BASE}/`, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace(
+      /(<script src="https:\/\/www\.gstatic\.com\/firebasejs\/[^"]+")\s+integrity="[^"]+"/g, '$1');
+    await route.fulfill({ response: res, body });
+  });
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await sleep(400);
   ok(!(await visible(page, '#splashAuthWrap')), 'no account card while the session is restoring');
