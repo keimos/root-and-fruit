@@ -6,10 +6,13 @@
  * it is skippable, and a signed-in user never sees the separate lead-capture
  * form. Covers the wiring most likely to rot:
  *   - account card first, only when Firebase config is injected
+ *   - Create Account walks the 4 onboarding steps, THEN opens the register form
  *   - the shared #authModal opens ABOVE the splash (z-index 2000 vs 1000)
  *   - "Continue without an account" reaches the covenant step
  *   - the 4 onboarding steps advance and the agreement gate holds
- *   - anonymous → lead form; signed-in → straight into the tool
+ *   - anonymous → lead form
+ *   - existing account (sign-in or restored session) → straight into the tool,
+ *     never the onboarding
  *
  * No Firebase project and no backend are needed: a dummy FIREBASE_API_KEY is
  * enough to enable the UI, and the signed-in branch is driven by setting
@@ -119,25 +122,51 @@ try {
     'step label reads "Account"'
   );
 
-  // The shared modal must render above the splash overlay, not behind it.
+  // ── Create Account path: onboarding first, register form last ──
   await page.click('text=Create Account →');
-  ok(await visible(page, '#authModal'), 'Create Account opens the shared auth modal');
+  ok(!(await visible(page, '#authModal')), 'Create Account does not jump straight to the form');
+  ok(await visible(page, '#splashStep1'), 'it walks "Before You Begin" first');
+  await page.click('#splashStep1 >> text=Get Started →');
+  await page.click('#splashStep1b >> text=Next →');
+  await page.click('#splashStep1c >> text=Next →');
+  ok(await visible(page, '#splashStep1d'), 'and reaches One Last Thing');
+  ok(
+    (await page.textContent('#btnStep1Next')).trim() === 'Create Account →',
+    'the agreement button says it creates the account'
+  );
+  await page.click('#agreeRow');
+  await page.click('#btnStep1Next');
+  ok(await visible(page, '#authModal'), 'agreeing opens the shared auth modal');
+  ok(await visible(page, '#rgPassword'), 'on the register panel');
+
+  // The shared modal must render above the splash overlay, not behind it.
   const stacking = await page.evaluate(() => ({
     modal: Number(getComputedStyle(document.getElementById('authModal')).zIndex),
     splash: Number(getComputedStyle(document.getElementById('splashOverlay')).zIndex),
   }));
   ok(stacking.modal > stacking.splash,
     `auth modal stacks above the splash (${stacking.modal} > ${stacking.splash})`);
-  ok(await visible(page, '#rgPassword'), 'it lands on the register panel');
-
-  await page.click('#authModal .modal-body >> nth=0');   // no-op click inside, must not close
   await page.evaluate(() => closeAuthModal());
   ok(
     (await page.evaluate(() => document.getElementById('authModal').style.zIndex)) === '',
     'closing the modal drops the lifted z-index'
   );
 
+  // Registering fires the auth listener, which must take them into the tool.
+  await page.evaluate(() => {
+    currentAuthUser = { uid: 'u-new', email: 'new@b.com' };
+    splashOnAuthChange();
+  });
+  ok(
+    await page.evaluate(() => document.getElementById('splashOverlay').classList.contains('hidden')),
+    'a newly registered user enters the tool'
+  );
+
   // ── Skip path ────────────────────────────────────────
+  page = await browser.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await sleep(1200);
   await page.click('text=Continue without an account');
   ok(!(await visible(page, '#splashAuthWrap')), 'skipping hides the account card');
   ok(await visible(page, '#splashStep1'), 'skipping lands on "Before You Begin"');
@@ -168,28 +197,54 @@ try {
   await page.click('#btnStep1Next');
   ok(await visible(page, '#splashStep2'), 'anonymous users still get the lead form');
 
-  // ── Signed-in branch ─────────────────────────────────
-  // Drive the same flag the real auth listener sets, then re-run the finish
-  // step: a signed-in user must go straight to the tool, no lead form.
+  // ── Existing account: sign in → straight to the tool ─
   page = await browser.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await sleep(1200);
+  await page.click('text=I already have an account');
+  ok(await visible(page, '#siPassword'), 'I already have an account opens sign-in');
+  // Drive the same flag the real auth listener sets on a successful sign-in.
   await page.evaluate(() => {
     currentAuthUser = { uid: 'u-test', email: 'a@b.com' };
     splashOnAuthChange();
+    closeAuthModal();
   });
-  ok(!(await visible(page, '#splashAuthWrap')), 'signing in advances past the account card');
-  ok(await visible(page, '#splashStep1'), 'and lands on the onboarding');
-
-  await page.evaluate(() => splashFinish());
   ok(
     await page.evaluate(() => document.getElementById('splashOverlay').classList.contains('hidden')),
-    'signed-in users skip the lead form and enter the tool'
+    'signing in skips the onboarding and enters the tool'
   );
   ok(
     await page.evaluate(() => sessionStorage.getItem('rfRegistered') === 'true'),
     'and the splash does not re-show on the next load'
+  );
+
+  // ── Restored session on load: no login flash, no onboarding ──
+  page = await browser.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  // Stub the Firebase SDK so the auth listener is held, as if a persisted
+  // session were still being restored, and resolve it signed in on cue.
+  await page.route('**/firebasejs/**/firebase-app-compat.js', (route) => route.fulfill({
+    contentType: 'application/javascript',
+    body: `window.firebase = {
+      initializeApp() {},
+      auth: Object.assign(() => ({
+        onAuthStateChanged(cb) { window.__fireAuth = cb; return () => {}; },
+        signOut: async () => { window.__fireAuth(null); },
+      }), {}),
+    };`,
+  }));
+  await page.route('**/firebasejs/**/firebase-auth-compat.js', (route) =>
+    route.fulfill({ contentType: 'application/javascript', body: '' }));
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await sleep(400);
+  ok(!(await visible(page, '#splashAuthWrap')), 'no account card while the session is restoring');
+  ok(!(await visible(page, '#splashOnboardWrap')), 'and no onboarding either');
+  await page.evaluate(() => window.__fireAuth({ uid: 'u-back', email: 'c@d.com', getIdToken: async () => 't' }));
+  await sleep(200);
+  ok(
+    await page.evaluate(() => document.getElementById('splashOverlay').classList.contains('hidden')),
+    'a restored session goes straight to the tool'
   );
 
   // ── Sign-out returns to login/registration ───────────
