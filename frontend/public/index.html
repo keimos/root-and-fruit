@@ -931,7 +931,7 @@
             sharing never require one.
           </div>
           <div style="display:flex;flex-direction:column;gap:10px;margin:20px 0 14px;">
-            <button class="btn-onboard-next" onclick="splashOpenAuth('register')" style="width:100%;">Create Account →</button>
+            <button class="btn-onboard-next" onclick="splashStartRegistration()" style="width:100%;">Create Account →</button>
             <button class="btn-onboard-skip" onclick="splashOpenAuth('signin')" style="width:100%;">I already have an account</button>
           </div>
           <button class="auth-link" onclick="splashSkipAuth()" style="font-size:12px;">Continue without an account</button>
@@ -4790,25 +4790,49 @@ toxicCBs.forEach((c,i) => c.addEventListener('change', () => { document.getEleme
 //  via Resend and persists the lead to Firestore. The notification address,
 //  sender, and auto-reply copy all live server-side in backend/server.js.
 
+// Why the visitor is walking the onboarding: 'register' (they chose Create
+// Account, so the agreement step hands off to the register form) or
+// 'anonymous' (they skipped, so it hands off to the lead form).
+let splashIntent = 'anonymous';
+
 /**
- * Decide what the splash shows on load. The account card comes first, ahead of
- * the "Before You Begin" onboarding; it is skipped when auth is unavailable or
- * the visitor is already signed in (onAuthStateChanged calls back in for the
- * restored-session case, which resolves after this runs).
- * in: none  out: void (DOM mutation)
+ * Decide what the splash shows on load. Anyone already signed in goes straight
+ * to the tool — the onboarding screens are for people who don't have an
+ * account yet. Otherwise the account card comes first; with auth unavailable
+ * the splash opens on the onboarding, as before.
+ * Firebase restores a persisted session asynchronously, so with auth enabled
+ * the splash stays blank (still covering the app) until authReady settles —
+ * showing the account card first would flash a login screen at a returning
+ * user on every load.
+ * in: none  out: Promise<void> (DOM mutation)
  */
-function initSplash() {
+async function initSplash() {
   const registered = sessionStorage.getItem('rfRegistered');
   if (registered) {
     document.getElementById('splashOverlay').classList.add('hidden');
     return;
   }
   const authAvailable = !!(window.__RF_CONFIG__ && window.__RF_CONFIG__.firebase && window.__RF_CONFIG__.firebase.apiKey);
-  if (authAvailable && !currentAuthUser) {
-    document.getElementById('splashAuthWrap').style.display = 'flex';
-    document.getElementById('splashOnboardWrap').style.display = 'none';
-    document.getElementById('splashStepLabel').textContent = 'Account';
-  }
+  if (!authAvailable) return;
+
+  const authWrap = document.getElementById('splashAuthWrap');
+  const onboardWrap = document.getElementById('splashOnboardWrap');
+  onboardWrap.style.display = 'none';
+  document.getElementById('splashStepLabel').textContent = '';
+  await authReady;
+  // A restored session has already dismissed the splash via splashOnAuthChange().
+  if (currentAuthUser) { splashEnterApp(); return; }
+  authWrap.style.display = 'flex';
+  document.getElementById('splashStepLabel').textContent = 'Account';
+}
+
+/**
+ * Dismiss the splash and mark this session as through it.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function splashEnterApp() {
+  sessionStorage.setItem('rfRegistered', 'true');
+  document.getElementById('splashOverlay').classList.add('hidden');
 }
 
 /**
@@ -4824,9 +4848,13 @@ function splashOpenAuth(panel) {
 
 /**
  * Leave the account card and start the "Before You Begin" flow.
- * in: none  out: void (DOM mutation)
+ * in:  intent ('register'|'anonymous') — where the agreement step hands off to
+ * out: void (DOM mutation; sets splashIntent)
  */
-function splashSkipAuth() {
+function splashBeginOnboarding(intent) {
+  splashIntent = intent;
+  document.getElementById('btnStep1Next').textContent =
+    intent === 'register' ? 'Create Account →' : 'Continue →';
   document.getElementById('splashAuthWrap').style.display = 'none';
   document.getElementById('splashOnboardWrap').style.display = 'flex';
   document.getElementById('splashStepLabel').textContent =
@@ -4836,31 +4864,47 @@ function splashSkipAuth() {
 }
 
 /**
- * Called when auth state resolves. If the splash is still on the account card,
- * a signed-in user is moved straight into the onboarding flow.
+ * "Continue without an account": onboarding, then the lead form.
  * in: none  out: void (DOM mutation)
  */
-function splashOnAuthChange() {
-  const wrap = document.getElementById('splashAuthWrap');
-  if (!wrap) return;
-  // Advance the splash *behind* the modal rather than closing it here —
-  // authRegister() shows a "verify your email" notice on a timer and
-  // authLogin() closes on its own; force-closing would cut the notice short.
-  if (currentAuthUser && wrap.style.display !== 'none') splashSkipAuth();
+function splashSkipAuth() {
+  splashBeginOnboarding('anonymous');
 }
 
 /**
- * Finish the onboarding flow. Signed-in users skip the separate lead-capture
- * form entirely — authRegister() already sent their details to /api/register —
- * so only anonymous visitors are asked to fill it in.
+ * "Create Account": the onboarding and agreement come first, and the register
+ * form opens from the final step — so a new account has always seen them.
+ * in: none  out: void (DOM mutation)
+ */
+function splashStartRegistration() {
+  splashBeginOnboarding('register');
+}
+
+/**
+ * Called when auth state resolves. A signed-in user — whether they just signed
+ * in, just registered, or had a session restored on load — goes straight to the
+ * tool; the onboarding screens are only for people without an account.
+ * The auth modal is deliberately left alone: authRegister() shows a "verify
+ * your email" notice on a timer and authLogin() closes on its own, so
+ * force-closing here would cut the notice short.
+ * in: none  out: void (DOM mutation, sessionStorage write)
+ */
+function splashOnAuthChange() {
+  const overlay = document.getElementById('splashOverlay');
+  if (!overlay || !currentAuthUser || overlay.classList.contains('hidden')) return;
+  splashEnterApp();
+}
+
+/**
+ * Finish the onboarding flow. A visitor who chose Create Account is handed the
+ * register form; signing up then dismisses the splash via splashOnAuthChange().
+ * Anonymous visitors get the separate lead-capture form — account holders never
+ * do, since authRegister() already sent their details to /api/register.
  * in: none  out: void (DOM mutation, sessionStorage write)
  */
 function splashFinish() {
-  if (currentAuthUser) {
-    sessionStorage.setItem('rfRegistered', 'true');
-    document.getElementById('splashOverlay').classList.add('hidden');
-    return;
-  }
+  if (currentAuthUser) { splashEnterApp(); return; }
+  if (splashIntent === 'register' && firebaseAuth) { splashOpenAuth('register'); return; }
   goToRegistration();
 }
 
@@ -4888,7 +4932,8 @@ function resetSplashToAccount() {
   const nextBtn = document.getElementById('btnStep1Next');
   if (cb) cb.checked = false;
   if (row) row.classList.remove('checked');
-  if (nextBtn) nextBtn.disabled = true;
+  if (nextBtn) { nextBtn.disabled = true; nextBtn.textContent = 'Continue →'; }
+  splashIntent = 'anonymous';
 
   // Account card front and centre; lead form and onboarding put away.
   const step2 = document.getElementById('splashStep2');
