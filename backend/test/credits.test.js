@@ -92,7 +92,10 @@ test('creditCost: audit and scrubber cost 1, electability is free', () => {
 test('creditCost: unknown kinds cost 0 — never fail open into a charge', () => {
   assert.equal(creditCost('nonsense'), 0);
   assert.equal(creditCost(undefined), 0);
-  assert.equal(Object.keys(CREDIT_COSTS).length, 3);
+  // The whole table, not just its size: adding a billable kind has to be a
+  // deliberate act that shows up in a diff here, with its price written down.
+  // `ballot` is flat and charged once per lookup however many races come back.
+  assert.deepEqual(CREDIT_COSTS, { analyze: 1, scrubber: 1, electability: 0, ballot: 3 });
 });
 
 // ── Pure: planDebit bucket ordering ────────────────────

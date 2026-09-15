@@ -31,11 +31,15 @@ const { cacheKey, normalizeSubject } = require('./cacheKey');
 
 const COLLECTION = 'audit_cache';
 
-// How long a cached audit stays servable. Records move (a new vote, a new
-// scandal), so a cached audit is a "recent read", not a permanent one. Set
-// AUDIT_CACHE_TTL_DAYS=0 to disable the cache entirely — a kill switch that
-// needs no code change.
-const TTL_DAYS = Number.parseFloat(process.env.AUDIT_CACHE_TTL_DAYS ?? '30');
+// How long a cached audit stays servable. Records move — a new vote, a new
+// endorsement, a scandal — so a cached audit is a "recent read", not a
+// permanent one. Seven days is deliberately short: this is a tool people use to
+// decide a vote, and during a campaign a week-old read of a candidate is
+// already at the edge of useful. It costs more than a longer window would (the
+// same subject is re-audited weekly instead of monthly), and that is the
+// intended trade — freshness over margin. Set AUDIT_CACHE_TTL_DAYS=0 to disable
+// the cache entirely, a kill switch that needs no code change.
+const TTL_DAYS = Number.parseFloat(process.env.AUDIT_CACHE_TTL_DAYS ?? '7');
 const TTL_MS = Number.isFinite(TTL_DAYS) && TTL_DAYS > 0 ? TTL_DAYS * 86400000 : 0;
 
 // A hung Firestore call must not add its own latency to an audit that is going

@@ -657,6 +657,162 @@ app.post('/api/search', limiters.ai, auth.requireAuth(), auth.liveEmailVerificat
 // Persists every registration to Firestore first so a lead is never lost,
 // then sends a team notification + registrant auto-reply via Resend.
 // Email is best-effort: a delivery failure does not fail the request.
+// ── Ballot lookup (Ballot Builder, phase 2) ───────────
+// Resolves the offices and candidates on a voter's ballot. Signed-in, verified,
+// rate-limited, and charged the FLAT ballot price up front — the same shape as
+// every other route that spends the Anthropic key. There is no unmetered path
+// to a web-search call on our key, and this route must never become one.
+//
+// v1 is bounded to CA / TX / LA and to candidates only. A ballot this tool gets
+// wrong sends someone to the polls with bad information, so the scope is set to
+// what can be hand-verified against real sample ballots rather than to what the
+// model will cheerfully answer for anywhere.
+
+// Bound the response and the prompt. A ballot with more races than this is a
+// runaway answer, not a real ballot.
+const MAX_BALLOT_RACES = 40;
+const MAX_LOCATION_CHARS = 200;
+
+/**
+ * Normalize a client-supplied state into a supported two-letter pilot code.
+ * Accepts either the code or the full name, in any case.
+ * @param {*} raw  client value (may be missing or junk)
+ * @returns {string|null}  'CA' | 'TX' | 'LA', or null when unsupported
+ */
+function pilotState(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toUpperCase();
+  if (prompts.BALLOT_STATES[v]) return v;
+  const byName = Object.entries(prompts.BALLOT_STATES)
+    .find(([, name]) => name.toUpperCase() === v);
+  return byName ? byName[0] : null;
+}
+
+/**
+ * Trim a free-text location field to a bounded, single-line string.
+ * @param {*} v  client value
+ * @returns {string}  cleaned value, '' when absent or unusable
+ */
+function locationField(v) {
+  return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, MAX_LOCATION_CHARS) : '';
+}
+
+/**
+ * Decide whether a location string is specific enough to resolve districts.
+ *
+ * Deliberately a shape check, not a validation of real-world existence: it asks
+ * for something that looks like a street line (a number and a name), which is
+ * what separates "1300 Perdido St" from "Louisiana" or "70112". Verifying the
+ * address is real is the model's job via official sources; refusing an obvious
+ * non-address is ours, and it happens before any credit is spent.
+ * @param {string} address  the cleaned address field
+ * @returns {boolean}  true when specific enough to attempt a lookup
+ */
+function isResolvableAddress(address) {
+  if (typeof address !== 'string') return false;
+  const v = address.trim();
+  if (v.length < 6) return false;
+  // A street number plus at least one word of street name.
+  return /\d/.test(v) && /[A-Za-z]{2,}/.test(v);
+}
+
+app.post('/api/ballot/lookup', limiters.ai, auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
+  if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
+
+  const state = pilotState(req.body && req.body.state);
+  if (!state) {
+    return res.status(400).json({
+      error: 'Ballot lookup currently covers California, Texas, and Louisiana only.',
+      code: 'state_unsupported',
+      supported: Object.keys(prompts.BALLOT_STATES)
+    });
+  }
+  const loc = {
+    state,
+    city: locationField(req.body.city),
+    county: locationField(req.body.county),
+    zip: locationField(req.body.zip),
+    address: locationField(req.body.address),
+    electionDate: locationField(req.body.electionDate)
+  };
+
+  // A ballot is defined by the districts one residence sits in, so a street
+  // address is required and a state, a city or a ZIP is not enough.
+  //
+  // This is a correctness rule before it is a cost rule. Without an address the
+  // model can only return every race in the state — a list that looks exactly
+  // like a ballot, is not one, and sends a voter to the polls expecting races
+  // they cannot vote in. A city does not fix it (Houston spans several
+  // congressional districts) and neither does a ZIP, which splits across
+  // districts often enough to be unreliable. It is a cost rule too: phase 3
+  // fans this list out into per-candidate audits, so a state-wide list means
+  // paying to audit candidates who were never on the ballot.
+  if (!isResolvableAddress(loc.address)) {
+    return res.status(400).json({
+      error: 'A street address is required — a ballot depends on which districts your home sits in. A state, city, or ZIP alone cannot resolve them.',
+      code: 'address_required'
+    });
+  }
+
+  // Injection fix, same rule as /api/analyze and /api/search: the client sends
+  // structured location fields only and the prompt is assembled here.
+  const built = prompts.buildBallotRequest(loc);
+  if (promptSize(built.system, built.messages) > LIMITS.promptChars) {
+    return res.status(413).json({ error: 'prompt too large' });
+  }
+  const max_tokens = clampInt(req.body.max_tokens, 1, LIMITS.searchMaxTokens, 6000);
+  const max_uses = clampInt(built.maxUses, 1, LIMITS.searchMaxUses, 5);
+
+  if (!billableAllowed(req, res, 'ballot')) return;
+  let charge;
+  try {
+    // The ledger ref is the STATE, never the address. A home address is the most
+    // sensitive thing this app ever receives; it is used to resolve districts
+    // and is deliberately not written to Firestore or to any log line.
+    charge = await credits.debit(req.user.uid, { kind: 'ballot', ref: `ballot:${state}` });
+  } catch (err) {
+    if (err instanceof creditsLib.InsufficientCreditsError) {
+      return res.status(402).json({ error: 'Insufficient credits', balance: err.balance, required: err.required });
+    }
+    console.error('Credit debit error:', err);
+    return res.status(500).json({ error: 'Could not verify credit balance' });
+  }
+
+  try {
+    const message = await withRetry(() => anthropic.messages.create({
+      model: MODEL,
+      max_tokens,
+      system: built.system,
+      messages: built.messages,
+      tools: [
+        { type: 'web_search_20260209', name: 'web_search', max_uses }
+      ]
+    }), { label: 'ballot' });
+
+    // Log the shape, never the location. A ballot that comes back with no races
+    // is the interesting failure — the model could not resolve the district —
+    // and it is invisible unless counted here.
+    const parsed = prompts.parseAuditFromMessage(message);
+    const raceCount = parsed && Array.isArray(parsed.races) ? parsed.races.length : null;
+    if (parsed) {
+      const v = prompts.validateBallot(parsed);
+      if (!v.ok) console.warn('Ballot output failed schema validation:', v.errors.slice(0, 5));
+      if (raceCount > MAX_BALLOT_RACES) {
+        console.warn(`Ballot returned ${raceCount} races, above the ${MAX_BALLOT_RACES} cap`);
+      }
+    } else {
+      console.warn('Ballot output not parseable as JSON');
+    }
+    console.log('Ballot lookup complete:', { state, races: raceCount, confidence: parsed && parsed.confidence });
+
+    if (charge.balanceAfter != null) res.setHeader('X-Credit-Balance', String(charge.balanceAfter));
+    res.json(message);
+  } catch (err) {
+    await credits.refund(req.user.uid, charge).catch((e) => console.error('Refund failed:', e));
+    sendUpstreamFailure(res, err, 'ballot');
+  }
+});
+
 app.post('/api/register', limiters.register, async (req, res) => {
   const { name, email, phone, org, isEvent, eventName, eventLocation, eventDate } = req.body || {};
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email || '');

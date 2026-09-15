@@ -55,7 +55,14 @@ const FREE_CREDIT_GRANT = Number.parseInt(process.env.FREE_CREDITS, 10) >= 0
 // automatically for every candidate audit — charging for work the user did not
 // opt into is a surprise. The Scrubber is an explicit opt-in checkbox and the UI
 // already tells users it costs extra.
-const CREDIT_COSTS = { analyze: 1, scrubber: 1, electability: 0 };
+//
+// `ballot` is the FLAT price of building a ballot, charged once at lookup
+// regardless of how many races come back. It is not priced per candidate on
+// purpose: a real ballot is 10-30 of them, and billing per audit would put a
+// single ballot past a whole free grant and make the feature unsellable. The
+// per-candidate audits it authorises are covered by that one charge, which the
+// shared audit cache is what makes affordable.
+const CREDIT_COSTS = { analyze: 1, scrubber: 1, electability: 0, ballot: 3 };
 
 /**
  * Error thrown when an account cannot cover a debit. Carries the numbers the

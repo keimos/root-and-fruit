@@ -275,6 +275,66 @@ Return ONLY valid JSON:
 }`;
 }
 
+// ── Ballot lookup (Ballot Builder, phase 2) ───────────
+// Assembled server-side like every other prompt here: the route sends only
+// structured location fields and this module builds the text, so a caller
+// hitting the endpoint directly cannot supply or override instructions.
+//
+// v1 is deliberately narrow — CANDIDATES ONLY (no ballot measures) and only
+// CA / TX / LA — because a ballot this tool gets wrong sends someone to the
+// polls with bad information. Narrow enough to hand-verify against real sample
+// ballots is worth more than national coverage nobody has checked.
+
+const BALLOT_STATES = Object.freeze({ CA: 'California', TX: 'Texas', LA: 'Louisiana' });
+
+const BALLOT_SYSTEM = 'You are an elections research analyst. Search official sources and return ONLY valid JSON — no markdown fences, no prose. Report only what you can verify against a source you actually found; an incomplete ballot is far better than an invented one.';
+
+/**
+ * Build the ballot-lookup user prompt for a location.
+ *
+ * Asks for offices and candidates only. Ballot measures are excluded on
+ * purpose: the app scores policies on a different rubric, and mixing them into
+ * the candidate slate doubles the surface with no v1 payoff.
+ *
+ * The address is required by the caller and is the whole point: a ballot is
+ * defined by the districts a specific residence sits in. Without one the answer
+ * is a state-wide list of races nobody actually votes, which reads as a ballot
+ * and is not one.
+ * @param {{state: string, address: string, city?: string, county?: string, zip?: string, electionDate?: string}} loc
+ *        location fields; `state` is a validated two-letter pilot-state code
+ * @returns {string}  the ballot lookup prompt
+ */
+function buildBallotPrompt(loc) {
+  const stateName = BALLOT_STATES[loc.state] || loc.state;
+  const where = [loc.address, loc.city, loc.county, loc.zip].filter(Boolean).join(', ');
+  const when = loc.electionDate ? `the election on ${loc.electionDate}` : 'the next scheduled election';
+  return `Find the offices and candidates that will appear on the ballot for the voter living at this address in ${stateName}: ${where}. Report the ballot for ${when}.
+
+This is one household's ballot, not a state-wide list. Use the address to determine which congressional, legislative, county, municipal and judicial districts this residence sits in, and include ONLY the races that this specific voter will see. A race that exists elsewhere in ${stateName} but not in this voter's districts must be left out.
+
+Search official sources first — the ${stateName} Secretary of State, the county elections office, and official candidate filing lists. Prefer those over news coverage or aggregators.
+
+Include ONLY races with candidates: federal, statewide, legislative, county, and municipal offices, plus judicial races if they are contested. Do NOT include ballot measures, propositions, bond issues, or constitutional amendments — those are out of scope for this list.
+
+Rules:
+- Report only races and candidates you can verify against a source you actually found. Omit anything you cannot.
+- If you cannot resolve a district from this address, leave those races out and name what was missing in "unresolved". Do NOT fall back to listing every race in the state.
+- Do not invent candidates to fill out a race. An empty or partial race list is the correct answer when the record is thin.
+- Mark the incumbent only when a source states it.
+
+Return ONLY valid JSON:
+{
+  "election": {"name": "official election name", "date": "YYYY-MM-DD or best known", "type": "primary|general|runoff|special|unknown"},
+  "jurisdiction": {"state": "${loc.state}", "county": "county if resolved", "city": "city if resolved", "districts": {"congressional": "if resolved", "stateSenate": "if resolved", "stateHouse": "if resolved"}},
+  "races": [
+    {"office": "office title", "district": "district or seat if any", "level": "federal|state|county|municipal|judicial", "candidates": [{"name": "full name", "party": "party or nonpartisan", "incumbent": false}]}
+  ],
+  "unresolved": ["anything that could not be determined for this address"],
+  "confidence": 0,
+  "sources": [{"title": "source name", "url": "https://..."}]
+}`;
+}
+
 // Task → { system, buildUser, maxUses }. Adding a task here is the ONLY way to
 // add a /api/search capability — there is no client-controlled prompt path.
 const SEARCH_TASKS = {
@@ -304,9 +364,63 @@ function buildSearchRequest(task, opts = {}) {
   };
 }
 
+/**
+ * Assemble a full ballot-lookup request from validated location fields.
+ *
+ * Sibling of buildSearchRequest, deliberately NOT a SEARCH_TASKS entry: that
+ * table is the fixed capability list for /api/search and takes only a subject
+ * name, while a ballot lookup takes a location and answers on a different
+ * contract. Keeping them apart leaves that table's guarantee intact.
+ * @param {object} loc  validated location (see buildBallotPrompt)
+ * @returns {{system: string, messages: Array, maxUses: number}}  request pieces
+ */
+function buildBallotRequest(loc) {
+  const system = DELIMIT_SUBJECT ? BALLOT_SYSTEM + ANTI_INJECTION_SUFFIX : BALLOT_SYSTEM;
+  return {
+    system,
+    // A ballot spans several offices across several official sources, so this
+    // needs more search rounds than a single-subject lookup.
+    messages: [{ role: 'user', content: buildBallotPrompt(loc) }],
+    maxUses: 5,
+  };
+}
+
+/**
+ * Validate a parsed ballot against the shape the frontend will render.
+ *
+ * Non-blocking in the same spirit as validateAudit: the caller logs failures
+ * rather than discarding the model's work. What it exists to catch is a
+ * response reshaped by an injected instruction, and races with no candidates.
+ * @param {*} obj  parsed model output
+ * @returns {{ok: boolean, errors: string[]}}  validity plus readable reasons
+ */
+function validateBallot(obj) {
+  const errors = [];
+  if (!obj || typeof obj !== 'object') return { ok: false, errors: ['not an object'] };
+  if (!Array.isArray(obj.races)) {
+    errors.push('races must be an array');
+  } else {
+    obj.races.forEach((r, i) => {
+      if (!r || typeof r.office !== 'string' || !r.office.trim()) errors.push(`races[${i}]: office required`);
+      if (!Array.isArray(r.candidates)) {
+        errors.push(`races[${i}]: candidates must be an array`);
+      } else {
+        r.candidates.forEach((c, j) => {
+          if (!c || typeof c.name !== 'string' || !c.name.trim()) errors.push(`races[${i}].candidates[${j}]: name required`);
+        });
+      }
+    });
+  }
+  if (obj.confidence != null && !(Number.isFinite(obj.confidence) && obj.confidence >= 0 && obj.confidence <= 100)) {
+    errors.push('confidence must be 0-100');
+  }
+  return { ok: errors.length === 0, errors };
+}
+
 module.exports = {
   buildAuditTarget, buildAuditPrompt, analyzeSystem, ANALYZE_SYSTEM, DELIMIT_SUBJECT,
   parseAuditFromMessage, validateAudit,
   SCRUBBER_SYSTEM, ELECTABILITY_SYSTEM, buildScrubberPrompt, buildElectabilityPrompt,
   buildSearchRequest,
+  BALLOT_SYSTEM, BALLOT_STATES, buildBallotPrompt, buildBallotRequest, validateBallot,
 };
