@@ -39,6 +39,7 @@ const EXPECTED_TABS = [
   ['assess', 'Full Report'],
   ['compare', 'Compare'],
   ['saved', 'Saved Audits'],
+  ['ballot', 'Ballot Builder'],
   ['methodology', 'About'],
 ];
 

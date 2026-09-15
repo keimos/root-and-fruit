@@ -118,7 +118,12 @@
     background: transparent;
     border-radius: 8px; padding: 3px;
     flex-wrap: wrap;
+    /* Seven tabs overflow a phone. The bar is nowrap inline, so let it scroll
+       sideways instead of clipping the last tab out of reach. */
+    overflow-x: auto;
+    scrollbar-width: none;
   }
+  .nav-tabs::-webkit-scrollbar { display: none; }
   .nav-tab {
     padding: 6px 14px; border-radius: 6px; cursor: pointer;
     font-size: 12px; font-weight: 500; text-transform: uppercase;
@@ -1384,6 +1389,7 @@
       <button class="nav-tab" onclick="showView('assess')">Full Report</button>
       <button class="nav-tab" onclick="showView('compare')">Compare</button>
       <button class="nav-tab" onclick="showView('saved')">Saved Audits</button>
+      <button class="nav-tab" onclick="showView('ballot')">Ballot Builder</button>
       <button class="nav-tab" onclick="showView('methodology')">About</button>
     </div>
   </div>
@@ -1999,6 +2005,30 @@
         <button class="btn-ghost" onclick="clearAllSaved()">Clear All</button>
       </div>
       <div id="savedList"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ VIEW: BALLOT BUILDER ══════════ -->
+  <div id="view-ballot" class="view">
+    <div class="container" style="padding-top:24px;">
+      <div class="card" style="text-align:center;padding:48px 28px;">
+        <div style="font-size:40px;margin-bottom:14px;">🗳️</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:0.05em;margin-bottom:10px;">The Ballot Builder</div>
+        <div id="ballotAvailability" style="font-size:15px;color:var(--text-dim);max-width:520px;margin:0 auto 26px;line-height:1.6;">
+          Checking availability…
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:24px;max-width:560px;margin:0 auto;text-align:left;">
+          <div class="section-label" style="margin-bottom:10px;">What it will do</div>
+          <div style="font-size:13px;color:var(--text-dim);line-height:1.7;">
+            Enter your street address and the Ballot Builder finds the races you will actually vote in — using your congressional, legislative and parish or county districts — then scores every candidate against the 57-point Integrity Index and gives you a printable scorecard to take to the polls.
+          </div>
+          <div class="section-label" style="margin:18px 0 10px;">Why it opens when it does</div>
+          <div style="font-size:13px;color:var(--text-dim);line-height:1.7;">
+            A ballot cannot be built before candidate filing closes — until then there is no official list of who is running. Opening earlier would mean guessing, and a guessed ballot is worse than no ballot.
+          </div>
+          <div style="font-size:12px;color:var(--text-dimmer);margin-top:18px;">First release covers California, Texas, and Louisiana.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2741,6 +2771,29 @@ RETURN JSON ONLY:
 }`;
 }
 // ── END LOCKED PROMPT ────────────────────────────────────────────────
+
+/**
+ * Fill the Ballot Builder panel with its real availability.
+ *
+ * The open date lives on the backend, not here: a date hardcoded in the page
+ * would drift from the one the route actually enforces, and the visible promise
+ * has to match the gate. Falls back to static copy when the backend cannot be
+ * reached, so the panel never sits on "Checking availability…".
+ * @returns {Promise<void>}  none (side effects: fetch, DOM mutation)
+ */
+async function loadBallotAvailability() {
+  const el = document.getElementById('ballotAvailability');
+  if (!el) return;
+  try {
+    const backendUrl = (window.__RF_CONFIG__ && window.__RF_CONFIG__.backendUrl) || '';
+    const res = await fetch(backendUrl + '/api/ballot/availability');
+    if (!res.ok) throw new Error('unavailable');
+    const data = await res.json();
+    el.textContent = data.message || 'The Ballot Builder is coming soon.';
+  } catch (err) {
+    el.textContent = 'The Ballot Builder is coming soon. Check back shortly.';
+  }
+}
 
 /**
  * Show or hide the "existing audit" notice above the Evidence Quality bar.
@@ -5511,7 +5564,7 @@ function showView(v) {
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
   const viewEl = document.getElementById('view-'+v);
   if (viewEl) viewEl.classList.add('active');
-  const tabs = ['results','community','assess','compare','saved','methodology'];
+  const tabs = ['results','community','assess','compare','saved','ballot','methodology'];
   const idx = tabs.indexOf(v);
   if (idx > -1) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
   // Reset scroll to the top so a tab switch always lands at the view's start,
@@ -5520,6 +5573,7 @@ function showView(v) {
   if (v === 'community') updateCommunityScoreIndicator();
   if (v === 'results') { updateResultsView(); setTimeout(drawShareCard, 100); }
   if (v === 'assess') populateReportHeader();
+  if (v === 'ballot') loadBallotAvailability();
   if (v === 'saved') renderSavedList();
   if (v === 'compare') populateCompareSelects();
 }

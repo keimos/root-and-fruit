@@ -16,6 +16,8 @@ const creditsLib = require('./lib/credits');
 const plansLib = require('./lib/plans');
 const stripeEvents = require('./lib/stripeEvents');
 const auditCacheLib = require('./lib/auditCache');
+const districtsLib = require('./lib/districts');
+const ballotWindow = require('./lib/ballotWindow');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -222,6 +224,10 @@ let credits = creditsLib.createCredits(db);
 // warn. Tests stay off Firestore by injecting a fake (__setAuditCache), not by
 // having production infer its own configuration from an env var nobody sets.
 let auditCache = auditCacheLib.createAuditCache(db);
+
+// Address -> districts, via the Census geocoder. `let` so tests can inject a
+// fake and stay off a live government API.
+let resolveDistricts = districtsLib.resolveDistricts;
 
 // ── Middleware ─────────────────────────────────────────
 // Cloud Run terminates TLS at Google's front end and forwards the real client
@@ -716,8 +722,23 @@ function isResolvableAddress(address) {
   return /\d/.test(v) && /[A-Za-z]{2,}/.test(v);
 }
 
+// Public: when does the Ballot Builder open? Unauthenticated on purpose — the
+// UI has to render "come back on the 8th" to a signed-out visitor, and making
+// them sign in to be told "not yet" would be a poor trade.
+app.get('/api/ballot/availability', (req, res) => res.json(ballotWindow.availability()));
+
 app.post('/api/ballot/lookup', limiters.ai, auth.requireAuth(), auth.liveEmailVerification(), async (req, res) => {
   if (!anthropic) return res.status(500).json({ error: 'API key not configured' });
+
+  // Closed until candidate filing has closed. First check in the handler, ahead
+  // of everything: before the open date there is no ballot to build for anyone,
+  // so there is nothing to validate and certainly nothing to charge for. Left
+  // ungated, this request does not fail — it hangs for minutes and then times
+  // out, which is the worst of every world.
+  if (!ballotWindow.isBallotOpen()) {
+    const a = ballotWindow.availability();
+    return res.status(503).json({ error: a.message, code: 'not_yet_available', availableFrom: a.availableFrom });
+  }
 
   const state = pilotState(req.body && req.body.state);
   if (!state) {
@@ -754,9 +775,49 @@ app.post('/api/ballot/lookup', limiters.ai, auth.requireAuth(), auth.liveEmailVe
     });
   }
 
+  // Resolve districts BEFORE billing. Two reasons, in order of importance:
+  //
+  // 1. A model cannot do this. Working out which districts an address sits in is
+  //    geocode-then-point-in-polygon, and a traced attempt spent over two and a
+  //    half minutes in code execution without ever answering. The Census
+  //    geocoder does it exactly, in under a second, for free.
+  // 2. The address stops here. Only district NAMES go into the prompt, so the
+  //    voter's address never reaches Anthropic at all.
+  //
+  // Billing after this point means an address we cannot resolve is never
+  // charged for — there is no ballot to sell.
+  const resolved = await resolveDistricts({
+    street: loc.address, city: loc.city, state: loc.state, zip: loc.zip
+  });
+  if (!resolved.ok) {
+    if (resolved.reason === 'no_match') {
+      return res.status(400).json({
+        error: 'We could not find that address. Check the street number and spelling, and use a residential address rather than a building name.',
+        code: 'address_unresolved'
+      });
+    }
+    console.error('District lookup unavailable:', resolved.detail);
+    return res.status(503).json({
+      error: 'Address lookup is temporarily unavailable. Please try again shortly.',
+      code: 'districts_unavailable'
+    });
+  }
+  console.log('Districts resolved:', { state, resolved: districtsLib.resolvedKinds(resolved) });
+
   // Injection fix, same rule as /api/analyze and /api/search: the client sends
-  // structured location fields only and the prompt is assembled here.
-  const built = prompts.buildBallotRequest(loc);
+  // structured location fields only and the prompt is assembled here — and from
+  // here on the address is gone, replaced by the districts it resolved to.
+  const built = prompts.buildBallotRequest({
+    state,
+    county: resolved.county,
+    city: loc.city,
+    electionDate: loc.electionDate,
+    districts: {
+      congressional: resolved.congressional,
+      stateSenate: resolved.stateSenate,
+      stateHouse: resolved.stateHouse
+    }
+  });
   if (promptSize(built.system, built.messages) > LIMITS.promptChars) {
     return res.status(413).json({ error: 'prompt too large' });
   }
@@ -1206,6 +1267,9 @@ module.exports.__setAnthropic = (client) => { anthropic = client; };
 module.exports.__setCredits = (fake) => { credits = fake || creditsLib.createCredits(db); };
 // Test-only: inject a fake audit cache so cache hit/miss behaviour can be tested
 // without Firestore. Pass null to restore the real one. Never called in prod.
+// Test-only: inject a fake district resolver so the ballot route can be tested
+// without calling the live Census geocoder. Pass null to restore. Never in prod.
+module.exports.__setDistricts = (fake) => { resolveDistricts = fake || districtsLib.resolveDistricts; };
 module.exports.__setAuditCache = (fake) => {
   auditCache = fake || auditCacheLib.createAuditCache(db);
 };
